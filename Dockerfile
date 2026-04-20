@@ -4,9 +4,11 @@ FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /app
 COPY . .
 
-# Build Forge engine modules first, then our server
-RUN mvn install -pl forge-engine -am -DskipTests -q
-RUN mvn package -pl forge-server -DskipTests -q
+# Step 1: Build & install Forge engine modules to local Maven repo
+RUN cd forge-engine && mvn install -DskipTests -q
+
+# Step 2: Build our bridge server (depends on Forge modules from step 1)
+RUN cd forge-server && mvn package -DskipTests -q
 
 # Stage 2: Lightweight runtime
 FROM eclipse-temurin:17-jre-alpine
