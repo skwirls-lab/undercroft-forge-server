@@ -9,9 +9,10 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Subscribes to Forge game events and forwards them to the WebSocket client.
- * This allows the frontend to show animations, sounds, and log entries.
+ * Extends IGameEventVisitor.Base so unhandled events return null by default.
+ * Forge events are Java records — fields accessed via method calls (e.g. event.card()).
  */
-public class GameEventForwarder implements IGameEventVisitor<Void> {
+public class GameEventForwarder extends IGameEventVisitor.Base<Void> {
     private static final Logger log = LoggerFactory.getLogger(GameEventForwarder.class);
 
     private final WsContext wsContext;
@@ -30,8 +31,8 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventTurnPhase event) {
         JsonObject data = new JsonObject();
-        data.addProperty("phase", event.phase != null ? event.phase.name() : "");
-        data.addProperty("playerTurn", event.playerTurn != null ? event.playerTurn.toString() : "");
+        data.addProperty("phase", event.phase() != null ? event.phase().name() : "");
+        data.addProperty("playerTurn", event.playerTurn() != null ? event.playerTurn().getName() : "");
         sendEvent("turn_phase", data);
         return null;
     }
@@ -39,10 +40,9 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventCardDamaged event) {
         JsonObject data = new JsonObject();
-        data.addProperty("cardId", event.card.getId());
-        data.addProperty("cardName", event.card.getName());
-        data.addProperty("damage", event.amount);
-        data.addProperty("isCombat", event.isCombat);
+        data.addProperty("cardName", event.card() != null ? event.card().getName() : "");
+        data.addProperty("damage", event.amount());
+        data.addProperty("damageType", event.type() != null ? event.type().name() : "Normal");
         sendEvent("card_damaged", data);
         return null;
     }
@@ -50,11 +50,9 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventSpellAbilityCast event) {
         JsonObject data = new JsonObject();
-        if (event.sa != null && event.sa.getHostCard() != null) {
-            data.addProperty("cardName", event.sa.getHostCard().getName());
-            data.addProperty("cardId", event.sa.getHostCard().getId());
+        if (event.sa() != null) {
+            data.addProperty("description", event.sa().toString());
         }
-        data.addProperty("description", event.sa != null ? event.sa.toString() : "");
         sendEvent("spell_cast", data);
         return null;
     }
@@ -62,9 +60,8 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventSpellResolved event) {
         JsonObject data = new JsonObject();
-        if (event.sa != null && event.sa.getHostCard() != null) {
-            data.addProperty("cardName", event.sa.getHostCard().getName());
-        }
+        data.addProperty("description", event.stackDescription());
+        data.addProperty("fizzled", event.hasFizzled());
         sendEvent("spell_resolved", data);
         return null;
     }
@@ -72,10 +69,11 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventCardChangeZone event) {
         JsonObject data = new JsonObject();
-        data.addProperty("cardId", event.card.getId());
-        data.addProperty("cardName", event.card.getName());
-        data.addProperty("from", event.from != null ? event.from.getZoneType().name() : "");
-        data.addProperty("to", event.to != null ? event.to.getZoneType().name() : "");
+        if (event.card() != null) {
+            data.addProperty("cardName", event.card().getName());
+        }
+        data.addProperty("from", event.from() != null ? event.from().zoneType().name() : "");
+        data.addProperty("to", event.to() != null ? event.to().zoneType().name() : "");
         sendEvent("card_zone_change", data);
         return null;
     }
@@ -83,9 +81,9 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventPlayerLivesChanged event) {
         JsonObject data = new JsonObject();
-        data.addProperty("player", event.player.getName());
-        data.addProperty("oldLife", event.oldLives);
-        data.addProperty("newLife", event.newLives);
+        data.addProperty("player", event.player() != null ? event.player().getName() : "");
+        data.addProperty("oldLife", event.oldLives());
+        data.addProperty("newLife", event.newLives());
         sendEvent("life_changed", data);
         return null;
     }
@@ -93,9 +91,9 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventPlayerPoisoned event) {
         JsonObject data = new JsonObject();
-        data.addProperty("player", event.receiver.getName());
-        data.addProperty("oldPoison", event.oldPoison);
-        data.addProperty("newPoison", event.newPoison);
+        data.addProperty("player", event.receiver() != null ? event.receiver().getName() : "");
+        data.addProperty("oldPoison", event.oldValue());
+        data.addProperty("amount", event.amount());
         sendEvent("poison_changed", data);
         return null;
     }
@@ -109,8 +107,7 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventGameOutcome event) {
         JsonObject data = new JsonObject();
-        data.addProperty("winner", event.result.getWinningPlayer() != null
-                ? event.result.getWinningPlayer().getName() : "draw");
+        data.addProperty("winner", event.winningPlayerName() != null ? event.winningPlayerName() : "draw");
         sendEvent("game_outcome", data);
         return null;
     }
@@ -124,9 +121,10 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventCardTapped event) {
         JsonObject data = new JsonObject();
-        data.addProperty("cardId", event.card.getId());
-        data.addProperty("cardName", event.card.getName());
-        data.addProperty("tapped", event.tapped);
+        if (event.card() != null) {
+            data.addProperty("cardName", event.card().getName());
+        }
+        data.addProperty("tapped", event.tapped());
         sendEvent("card_tapped", data);
         return null;
     }
@@ -140,11 +138,14 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventCardCounters event) {
         JsonObject data = new JsonObject();
-        data.addProperty("cardId", event.card.getId());
-        data.addProperty("cardName", event.card.getName());
-        data.addProperty("counterType", event.counterType.name());
-        data.addProperty("oldValue", event.oldValue);
-        data.addProperty("newValue", event.newValue);
+        if (event.card() != null) {
+            data.addProperty("cardName", event.card().getName());
+        }
+        if (event.type() != null) {
+            data.addProperty("counterType", event.type().toString());
+        }
+        data.addProperty("oldValue", event.oldValue());
+        data.addProperty("newValue", event.newValue());
         sendEvent("counters_changed", data);
         return null;
     }
@@ -152,15 +153,8 @@ public class GameEventForwarder implements IGameEventVisitor<Void> {
     @Override
     public Void visit(GameEventAddLog event) {
         JsonObject data = new JsonObject();
-        data.addProperty("message", event.message);
+        data.addProperty("message", event.message());
         sendEvent("log", data);
-        return null;
-    }
-
-    // Default handler for events we don't specifically handle
-    @Override
-    public Void visit(GameEvent event) {
-        // Silently ignore unhandled events
         return null;
     }
 }

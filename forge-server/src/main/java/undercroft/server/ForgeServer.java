@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -32,6 +33,11 @@ public class ForgeServer {
 
     // Active game sessions keyed by WebSocket session ID
     private static final Map<String, GameSession> sessions = new ConcurrentHashMap<>();
+    private static final Map<WsContext, String> contextToSession = new ConcurrentHashMap<>();
+
+    static String getSessionId(WsContext ctx) {
+        return contextToSession.computeIfAbsent(ctx, k -> UUID.randomUUID().toString());
+    }
 
     public static void main(String[] args) {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "7000"));
@@ -53,13 +59,13 @@ public class ForgeServer {
 
         app.ws("/game", ws -> {
             ws.onConnect(ctx -> {
-                String sessionId = ctx.getSessionId();
+                String sessionId = getSessionId(ctx);
                 log.info("Client connected: {}", sessionId);
                 sendMessage(ctx, "connected", Map.of("sessionId", sessionId));
             });
 
             ws.onMessage(ctx -> {
-                String sessionId = ctx.getSessionId();
+                String sessionId = getSessionId(ctx);
                 try {
                     JsonObject msg = gson.fromJson(ctx.message(), JsonObject.class);
                     String type = msg.get("type").getAsString();
@@ -78,16 +84,17 @@ public class ForgeServer {
             });
 
             ws.onClose(ctx -> {
-                String sessionId = ctx.getSessionId();
+                String sessionId = getSessionId(ctx);
                 log.info("Client disconnected: {}", sessionId);
                 GameSession session = sessions.remove(sessionId);
                 if (session != null) {
                     session.shutdown();
                 }
+                contextToSession.remove(ctx);
             });
 
             ws.onError(ctx -> {
-                String sessionId = ctx.getSessionId();
+                String sessionId = getSessionId(ctx);
                 log.error("WebSocket error for {}: {}", sessionId,
                         ctx.error() != null ? ctx.error().getMessage() : "unknown");
             });

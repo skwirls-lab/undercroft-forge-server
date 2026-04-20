@@ -12,7 +12,7 @@ public class BridgeLobbyPlayer extends LobbyPlayer {
     }
 
     @Override
-    public boolean isAI() {
-        return false;
+    public void hear(LobbyPlayer player, String message) {
+        // No-op for headless server
     }
 }

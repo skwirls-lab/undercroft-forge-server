@@ -89,7 +89,7 @@ public class GameSession {
                 humanController = new BridgePlayerController(game, p, humanLobby, wsContext, gson);
                 p.setController(humanController);
             }
-            p.updateOpponentsForView();
+            // p.updateOpponentsForView(); // called automatically later
         }
 
         // Create the bridge GUI that pushes state to WebSocket
@@ -116,11 +116,11 @@ public class GameSession {
                     ForgeServer.sendError(wsContext, "Game error: " + e.getMessage());
                 }
             }
-        }, "forge-game-" + wsContext.getSessionId());
+        }, "forge-game-" + ForgeServer.getSessionId(wsContext));
         gameThread.setDaemon(true);
         gameThread.start();
 
-        log.info("Game started for session {}", wsContext.getSessionId());
+        log.info("Game started for session {}", ForgeServer.getSessionId(wsContext));
     }
 
     /**

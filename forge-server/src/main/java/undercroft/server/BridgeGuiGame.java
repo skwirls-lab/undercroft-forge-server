@@ -416,7 +416,7 @@ public class BridgeGuiGame implements IGuiGame {
     public void setGamePause(boolean pause) { this.paused = pause; }
 
     @Override
-    public PlaybackSpeed getGameSpeed() { return PlaybackSpeed.Normal; }
+    public PlaybackSpeed getGameSpeed() { return PlaybackSpeed.NORMAL; }
 
     @Override
     public void setGameSpeed(PlaybackSpeed gameSpeed) {}

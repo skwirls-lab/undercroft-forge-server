@@ -12,6 +12,8 @@ import forge.game.player.Player;
 import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.zone.ZoneType;
 
+import java.util.Map;
+
 /**
  * Serializes Forge game state to JSON for the WebSocket client.
  * Maps Forge's internal state to a format our React frontend can consume.
@@ -171,10 +173,9 @@ public class GameStateSerializer {
             // Counters
             if (c.hasCounters()) {
                 JsonObject counters = new JsonObject();
-                for (CounterType ct : CounterType.values()) {
-                    int count = c.getCounters(ct);
-                    if (count > 0) {
-                        counters.addProperty(ct.name(), count);
+                for (Map.Entry<CounterType, Integer> entry : c.getCounters().entrySet()) {
+                    if (entry.getValue() > 0) {
+                        counters.addProperty(entry.getKey().toString(), entry.getValue());
                     }
                 }
                 card.add("counters", counters);

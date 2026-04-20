@@ -27,6 +27,7 @@ import forge.game.replacement.ReplacementEffect;
 import forge.game.spellability.*;
 import forge.game.staticability.StaticAbility;
 import forge.game.trigger.WrappedAbility;
+import forge.game.combat.CombatUtil;
 import forge.game.zone.PlayerZone;
 import forge.game.zone.ZoneType;
 import forge.item.PaperCard;
@@ -63,6 +64,14 @@ public class BridgePlayerController extends PlayerController {
     private int nextRequestId = 0;
 
     private volatile boolean shutdown = false;
+
+    @Override
+    public void cancelAwaitNextInput() {
+        // Cancel any pending choice when the engine wants to interrupt
+        for (CompletableFuture<JsonObject> future : pendingChoices.values()) {
+            future.complete(new JsonObject());
+        }
+    }
 
     public BridgePlayerController(Game game, Player player, LobbyPlayer lobbyPlayer,
                                    WsContext wsContext, Gson gson) {
@@ -364,7 +373,15 @@ public class BridgePlayerController extends PlayerController {
             }
         }
 
-        data.add("validTargets", serializeCards(validTargets));
+        JsonArray targetsArr = new JsonArray();
+        for (GameEntity ge : validTargets) {
+            JsonObject t = new JsonObject();
+            t.addProperty("id", ge.getId());
+            t.addProperty("name", ge.getName());
+            t.addProperty("type", ge instanceof Card ? "card" : "player");
+            targetsArr.add(t);
+        }
+        data.add("validTargets", targetsArr);
         data.addProperty("minTargets", restrictions != null ? restrictions.getMinTargets(currentAbility, currentAbility.getHostCard()) : 0);
         data.addProperty("maxTargets", restrictions != null ? restrictions.getMaxTargets(currentAbility, currentAbility.getHostCard()) : 1);
 
@@ -570,7 +587,7 @@ public class BridgePlayerController extends PlayerController {
         // Send list of possible attackers to client
         CardCollection possibleAttackers = new CardCollection();
         for (Card c : attacker.getCardsIn(ZoneType.Battlefield)) {
-            if (c.isCreature() && c.canAttack()) {
+            if (c.isCreature() && CombatUtil.canAttack(c)) {
                 possibleAttackers.add(c);
             }
         }
@@ -621,7 +638,7 @@ public class BridgePlayerController extends PlayerController {
         // Get possible blockers and attacking creatures
         CardCollection possibleBlockers = new CardCollection();
         for (Card c : defender.getCardsIn(ZoneType.Battlefield)) {
-            if (c.isCreature() && c.canBlock()) {
+            if (c.isCreature() && !c.isTapped()) {
                 possibleBlockers.add(c);
             }
         }
