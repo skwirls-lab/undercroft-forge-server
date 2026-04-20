@@ -772,6 +772,24 @@ public class BridgePlayerController extends PlayerController {
     }
 
     @Override
+    public List<Card> chooseCardsForZoneChange(ZoneType destination, List<ZoneType> origin,
+            SpellAbility sa, CardCollection fetchList, int min, int max,
+            DelayedReveal delayedReveal, String selectPrompt, Player decider) {
+        if (fetchList.isEmpty()) return Collections.emptyList();
+
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", selectPrompt != null ? selectPrompt : "Choose cards");
+        data.addProperty("min", min);
+        data.addProperty("max", max);
+        data.addProperty("destination", destination.name());
+        data.add("options", serializeCards(fetchList));
+
+        JsonObject response = requestChoice("choose_cards_zone", data);
+        CardCollectionView selected = parseCardSelection(response, fetchList, min);
+        return new ArrayList<>(selected);
+    }
+
+    @Override
     public CardCollectionView orderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
         return cards; // Default order
     }
