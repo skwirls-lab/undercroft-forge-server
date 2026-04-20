@@ -66,6 +66,11 @@ public class BridgePlayerController extends PlayerController {
     private volatile boolean shutdown = false;
 
     @Override
+    public void autoPassCancel() {
+        // No-op for headless server
+    }
+
+    @Override
     public void awaitNextInput() {
         // Called when engine is waiting for player input — no-op, we use WebSocket async
     }

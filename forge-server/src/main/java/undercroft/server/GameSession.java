@@ -174,9 +174,10 @@ public class GameSession {
 
     private void sendGameOver() {
         JsonObject payload = new JsonObject();
-        Player winner = game.getOutcome().getWinningPlayer();
-        payload.addProperty("winner", winner != null ? winner.getName() : "draw");
-        payload.addProperty("winnerIsHuman", winner != null && winner.getController() == humanController);
+        RegisteredPlayer winner = game.getOutcome().getWinningPlayer();
+        payload.addProperty("winner", winner != null ? winner.getPlayer().getName() : "draw");
+        payload.addProperty("winnerIsHuman", winner != null && winner.getPlayer().getName().equals(
+                humanController != null ? humanController.getPlayer().getName() : ""));
         ForgeServer.sendMessage(wsContext, "game_over", payload);
     }
 
