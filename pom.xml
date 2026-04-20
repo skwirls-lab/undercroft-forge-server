@@ -1,0 +1,33 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>undercroft</groupId>
+    <artifactId>undercroft-forge-server-root</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>Undercroft Forge Server (Root)</name>
+
+    <description>
+        WebSocket bridge server exposing the Forge MTG engine for the Undercroft web frontend.
+        Forge engine modules are GPL v3 (https://github.com/Card-Forge/forge).
+    </description>
+
+    <licenses>
+        <license>
+            <name>GPL 3</name>
+            <url>http://www.gnu.org/licenses/gpl-3.0-standalone.html</url>
+        </license>
+    </licenses>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <!-- Build order: Forge engine modules first, then our server -->
+    <modules>
+        <module>forge-engine</module>
+        <module>forge-server</module>
+    </modules>
+</project>

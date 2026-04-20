@@ -1,0 +1,25 @@
+# Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Maven wrapper
+.mvn/wrapper/maven-wrapper.jar
+
+# Flatten plugin
+.flattened-pom.xml

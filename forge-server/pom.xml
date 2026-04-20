@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>undercroft</groupId>
+    <artifactId>forge-server</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>Undercroft Forge Server</name>
+    <description>WebSocket bridge between Forge MTG engine and Undercroft web frontend</description>
+
+    <properties>
+        <maven.compiler.release>17</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <forge.version>2.0.12-SNAPSHOT</forge.version>
+        <javalin.version>6.4.0</javalin.version>
+        <gson.version>2.11.0</gson.version>
+    </properties>
+
+    <dependencies>
+        <!-- Forge engine modules (install from local forge-master build) -->
+        <dependency>
+            <groupId>forge</groupId>
+            <artifactId>forge-core</artifactId>
+            <version>${forge.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>forge</groupId>
+            <artifactId>forge-game</artifactId>
+            <version>${forge.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>forge</groupId>
+            <artifactId>forge-ai</artifactId>
+            <version>${forge.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>forge</groupId>
+            <artifactId>forge-gui</artifactId>
+            <version>${forge.version}</version>
+        </dependency>
+
+        <!-- Lightweight web framework with WebSocket support -->
+        <dependency>
+            <groupId>io.javalin</groupId>
+            <artifactId>javalin</artifactId>
+            <version>${javalin.version}</version>
+        </dependency>
+
+        <!-- JSON serialization -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>${gson.version}</version>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.13</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Fat JAR with all dependencies for deployment -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>undercroft.server.ForgeServer</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
