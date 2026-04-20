@@ -87,7 +87,7 @@ public class GameSession {
             if (p.getLobbyPlayer() == humanLobby) {
                 // Replace the default controller with our bridge
                 humanController = new BridgePlayerController(game, p, humanLobby, wsContext, gson);
-                p.setController(humanController);
+                p.dangerouslySetController(humanController);
             }
             // p.updateOpponentsForView(); // called automatically later
         }

@@ -66,6 +66,11 @@ public class BridgePlayerController extends PlayerController {
     private volatile boolean shutdown = false;
 
     @Override
+    public void awaitNextInput() {
+        // Called when engine is waiting for player input — no-op, we use WebSocket async
+    }
+
+    @Override
     public void cancelAwaitNextInput() {
         // Cancel any pending choice when the engine wants to interrupt
         for (CompletableFuture<JsonObject> future : pendingChoices.values()) {
@@ -363,14 +368,7 @@ public class BridgePlayerController extends PlayerController {
         List<GameEntity> validTargets = new ArrayList<>();
         TargetRestrictions restrictions = currentAbility.getTargetRestrictions();
         if (restrictions != null) {
-            for (Card c : currentAbility.getTargetRestrictions().getAllCandidates(currentAbility, true)) {
-                validTargets.add(c);
-            }
-            for (Player p : getGame().getPlayers()) {
-                if (currentAbility.canTarget(p)) {
-                    validTargets.add(p);
-                }
-            }
+            validTargets.addAll(restrictions.getAllCandidates(currentAbility, true));
         }
 
         JsonArray targetsArr = new JsonArray();
@@ -382,8 +380,8 @@ public class BridgePlayerController extends PlayerController {
             targetsArr.add(t);
         }
         data.add("validTargets", targetsArr);
-        data.addProperty("minTargets", restrictions != null ? restrictions.getMinTargets(currentAbility, currentAbility.getHostCard()) : 0);
-        data.addProperty("maxTargets", restrictions != null ? restrictions.getMaxTargets(currentAbility, currentAbility.getHostCard()) : 1);
+        data.addProperty("minTargets", restrictions != null ? restrictions.getMinTargets(currentAbility.getHostCard(), currentAbility) : 0);
+        data.addProperty("maxTargets", restrictions != null ? restrictions.getMaxTargets(currentAbility.getHostCard(), currentAbility) : 1);
 
         JsonObject response = requestChoice("choose_targets", data);
 
