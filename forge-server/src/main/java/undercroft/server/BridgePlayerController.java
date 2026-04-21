@@ -11,6 +11,7 @@ import forge.card.ICardFace;
 import forge.card.mana.ManaCost;
 import forge.card.mana.ManaCostShard;
 import forge.deck.Deck;
+import forge.deck.DeckSection;
 import forge.game.*;
 import forge.game.ability.effects.RollDiceEffect;
 import forge.game.card.*;
@@ -1069,6 +1070,167 @@ public class BridgePlayerController extends PlayerController {
             List<Pair<SpellAbilityStackInstance, GameObject>> allTargets) {
         return allTargets.isEmpty() ? null : allTargets.get(0);
     }
+
+    // --- All remaining abstract method stubs ---
+
+    @Override
+    public Card chooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin,
+            SpellAbility sa, CardCollection fetchList, DelayedReveal delayedReveal,
+            String selectPrompt, boolean isOptional, Player decider) {
+        if (fetchList.isEmpty()) return null;
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", selectPrompt != null ? selectPrompt : "Choose a card");
+        data.addProperty("destination", destination.name());
+        data.add("options", serializeCards(fetchList));
+        JsonObject response = requestChoice("choose_single_card_zone", data);
+        if (response.has("selectedIds")) {
+            int id = response.getAsJsonArray("selectedIds").get(0).getAsInt();
+            for (Card c : fetchList) { if (c.getId() == id) return c; }
+        }
+        return isOptional ? null : fetchList.get(0);
+    }
+
+    @Override
+    public boolean chooseBinary(SpellAbility sa, String question, BinaryChoiceType kindOfChoice, Boolean defaultChoice) {
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", question);
+        data.addProperty("choiceType", kindOfChoice.name());
+        JsonObject response = requestChoice("choose_binary", data);
+        return response.has("result") ? response.get("result").getAsBoolean()
+                : (defaultChoice != null ? defaultChoice : true);
+    }
+
+    @Override
+    public boolean chooseFlipResult(SpellAbility sa, Player flipper, boolean[] results, boolean call) {
+        return true; // Call heads
+    }
+
+    @Override
+    public byte chooseColor(String message, SpellAbility sa, ColorSet colors) {
+        return colors.iterator().next();
+    }
+
+    @Override
+    public byte chooseColorAllowColorless(String message, Card c, ColorSet colors) {
+        return colors.iterator().next();
+    }
+
+    @Override
+    public ColorSet chooseColors(String message, SpellAbility sa, int min, int max, ColorSet options) {
+        return options;
+    }
+
+    @Override
+    public ICardFace chooseSingleCardFace(SpellAbility sa, String message, Predicate<ICardFace> cpp, String name) {
+        return null;
+    }
+
+    @Override
+    public ICardFace chooseSingleCardFace(SpellAbility sa, List<ICardFace> faces, String message) {
+        return faces.isEmpty() ? null : faces.get(0);
+    }
+
+    @Override
+    public CardState chooseSingleCardState(SpellAbility sa, List<CardState> states, String message, Map<String, Object> params) {
+        return states.isEmpty() ? null : states.get(0);
+    }
+
+    @Override
+    public boolean chooseCardsPile(SpellAbility sa, CardCollectionView pile1, CardCollectionView pile2, String faceUp) {
+        return true; // Choose pile 1
+    }
+
+    @Override
+    public CounterType chooseCounterType(List<CounterType> options, SpellAbility sa, String prompt, Map<String, Object> params) {
+        return options.isEmpty() ? null : options.get(0);
+    }
+
+    @Override
+    public String chooseKeywordForPump(List<String> options, SpellAbility sa, String prompt, Card tgtCard) {
+        return options.isEmpty() ? "" : options.get(0);
+    }
+
+    @Override
+    public int chooseNumber(SpellAbility sa, String title, int min, int max) {
+        return min;
+    }
+
+    @Override
+    public int chooseNumber(SpellAbility sa, String title, List<Integer> values, Player relatedPlayer) {
+        return values.isEmpty() ? 0 : values.get(0);
+    }
+
+    @Override
+    public List<OptionalCostValue> chooseOptionalCosts(SpellAbility chosen, List<OptionalCostValue> optionalCostValues) {
+        return Collections.emptyList();
+    }
+
+    @Override
+    public List<CostPart> orderCosts(List<CostPart> costs) {
+        return costs;
+    }
+
+    @Override
+    public String chooseProtectionType(String string, SpellAbility sa, List<String> choices) {
+        return choices.isEmpty() ? "" : choices.get(0);
+    }
+
+    @Override
+    public boolean confirmPayment(CostPart costPart, String string, SpellAbility sa) {
+        return true;
+    }
+
+    @Override
+    public ReplacementEffect chooseSingleReplacementEffect(List<ReplacementEffect> possibleReplacers) {
+        return possibleReplacers.isEmpty() ? null : possibleReplacers.get(0);
+    }
+
+    @Override
+    public StaticAbility chooseSingleStaticAbility(String prompt, List<StaticAbility> possibleReplacers) {
+        return possibleReplacers.isEmpty() ? null : possibleReplacers.get(0);
+    }
+
+    @Override
+    public boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
+        return false;
+    }
+
+    @Override
+    public boolean payCostDuringRoll(Cost cost, SpellAbility sa, FCollectionView<Player> allPayers) {
+        return false;
+    }
+
+    @Override
+    public boolean payCombatCost(Card card, Cost cost, SpellAbility sa, String prompt) {
+        return false;
+    }
+
+    @Override
+    public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt, ManaConversionMatrix matrix, boolean effect) {
+        return false;
+    }
+
+    @Override
+    public String chooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
+        return "";
+    }
+
+    @Override
+    public String chooseCardName(SpellAbility sa, List<ICardFace> faces, String message) {
+        return faces.isEmpty() ? "" : faces.get(0).getName();
+    }
+
+    @Override
+    public void revealAnte(String message, Multimap<Player, PaperCard> removedAnteCards) {}
+
+    @Override
+    public void revealAISkipCards(String message, Map<Player, Map<DeckSection, List<? extends PaperCard>>> deckCards) {}
+
+    @Override
+    public void revealUnsupported(Map<Player, List<PaperCard>> unsupported) {}
+
+    @Override
+    public void resetAtEndOfTurn() {}
 
     // --- Helper to parse card selections from client response ---
 
