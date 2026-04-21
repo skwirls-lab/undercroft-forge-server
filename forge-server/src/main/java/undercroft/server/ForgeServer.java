@@ -50,12 +50,10 @@ public class ForgeServer {
         // Initialize Forge's static data (card definitions, etc.)
         ForgeInit.initialize(forgeRes);
 
-        Javalin app = Javalin.create(config -> {
-            config.router.mount(router -> {
-                // Health check endpoint
-                router.get("/health", ctx -> ctx.result("ok"));
-            });
-        });
+        Javalin app = Javalin.create();
+
+        // Health check endpoint
+        app.get("/health", ctx -> ctx.result("ok"));
 
         app.ws("/game", ws -> {
             ws.onConnect(ctx -> {
