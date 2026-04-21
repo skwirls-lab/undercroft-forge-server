@@ -58,6 +58,7 @@ public class GameSession {
 
         // Create registered players
         BridgeLobbyPlayer humanLobby = new BridgeLobbyPlayer(playerName);
+        humanLobby.setWsContext(wsContext, gson);
         LobbyPlayerAi aiLobby = new LobbyPlayerAi("AI Opponent", null);
 
         RegisteredPlayer humanReg = new RegisteredPlayer(humanDeck);
@@ -79,18 +80,13 @@ public class GameSession {
         rules.setGamesPerMatch(1);
 
         // Create match and game
+        // createGame() calls IGameEntitiesFactory.createIngamePlayer() on each LobbyPlayer
+        // which creates the BridgePlayerController for the human player
         match = new Match(rules, players, playerName + " vs AI");
         game = match.createGame();
 
-        // Find the human player and attach our bridge controller
-        for (Player p : game.getPlayers()) {
-            if (p.getLobbyPlayer() == humanLobby) {
-                // Replace the default controller with our bridge
-                humanController = new BridgePlayerController(game, p, humanLobby, wsContext, gson);
-                p.dangerouslySetController(humanController);
-            }
-            // p.updateOpponentsForView(); // called automatically later
-        }
+        // Get the controller that was created during game initialization
+        humanController = humanLobby.getLastController();
 
         // Create the bridge GUI that pushes state to WebSocket
         BridgeGuiGame guiGame = new BridgeGuiGame(wsContext, gson);
