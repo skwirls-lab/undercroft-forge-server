@@ -53,9 +53,13 @@ public class ForgeInit {
             // Set up a stub IGuiBase so ForgeConstants can initialize
             GuiBase.setInterface(new StubGuiBase(assetsDir));
 
-            // Initialize language
-            Lang.createInstance("en-US");
-            Localizer.getInstance().initialize("en-US", ForgeConstants.LANG_DIR);
+            // Initialize language (non-fatal if missing)
+            try {
+                Lang.createInstance("en-US");
+                Localizer.getInstance().initialize("en-US", ForgeConstants.LANG_DIR);
+            } catch (Exception langEx) {
+                log.warn("Language files not found, running without localization: {}", langEx.getMessage());
+            }
 
             // Create card storage readers
             CardStorageReader cardReader = new CardStorageReader(
