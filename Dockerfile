@@ -17,10 +17,10 @@ WORKDIR /app
 COPY --from=build /app/forge-server/target/forge-server-1.0.0-SNAPSHOT.jar app.jar
 
 # Copy Forge card data (card definitions, editions, etc.)
-COPY --from=build /app/forge-res /app/forge-res
+COPY --from=build /app/forge-res /app/res
 
 ENV PORT=7000
-ENV FORGE_RES=/app/forge-res
+ENV FORGE_RES=/app/res
 
 EXPOSE 7000
 
