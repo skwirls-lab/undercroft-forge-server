@@ -71,6 +71,12 @@ public class ForgeInit {
                     CardStorageReader.ProgressObserver.emptyObserver,
                     false);
 
+            // Create temp dirs for custom content (StaticData requires writable paths)
+            File customDir = new File(System.getProperty("java.io.tmpdir"), "forge-custom");
+            customDir.mkdirs();
+            File customEditionsDir = new File(customDir, "editions");
+            customEditionsDir.mkdirs();
+
             // Initialize static data (card database)
             StaticData data = new StaticData(
                     cardReader,
@@ -78,7 +84,7 @@ public class ForgeInit {
                     null, // no custom cards
                     null, // no custom tokens
                     ForgeConstants.EDITIONS_DIR,
-                    "", // no custom editions
+                    customEditionsDir.getAbsolutePath(),
                     ForgeConstants.BLOCK_DATA_DIR,
                     "", // no set lookup
                     "A", // card art preference
