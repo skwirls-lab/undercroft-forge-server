@@ -1,6 +1,7 @@
 package undercroft.server;
 
 import forge.CardStorageReader;
+import forge.ImageKeys;
 import forge.StaticData;
 import forge.card.CardDb;
 import forge.gui.GuiBase;
@@ -25,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -76,6 +78,19 @@ public class ForgeInit {
             customDir.mkdirs();
             File customEditionsDir = new File(customDir, "editions");
             customEditionsDir.mkdirs();
+
+            // Initialize image keys (headless — no actual images, but maps must be non-null)
+            ImageKeys.initializeDirs(
+                    "",                    // cards pic dir
+                    new HashMap<>(),        // cards sub-dirs
+                    "",                    // tokens pic dir
+                    "",                    // icons pic dir
+                    "",                    // boosters pic dir
+                    "",                    // fat packs pic dir
+                    "",                    // booster boxes pic dir
+                    "",                    // precons pic dir
+                    ""                     // tournament packs pic dir
+            );
 
             // Initialize static data (card database)
             StaticData data = new StaticData(
