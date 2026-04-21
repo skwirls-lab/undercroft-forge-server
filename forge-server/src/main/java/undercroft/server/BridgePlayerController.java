@@ -1107,12 +1107,12 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public byte chooseColor(String message, SpellAbility sa, ColorSet colors) {
-        return colors.iterator().next();
+        return colors.getColor();
     }
 
     @Override
     public byte chooseColorAllowColorless(String message, Card c, ColorSet colors) {
-        return colors.iterator().next();
+        return colors.getColor();
     }
 
     @Override
