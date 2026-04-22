@@ -50,7 +50,9 @@ public class ForgeServer {
         // Initialize Forge's static data (card definitions, etc.)
         ForgeInit.initialize(forgeRes);
 
-        Javalin app = Javalin.create();
+        Javalin app = Javalin.create(config -> {
+            config.enableCorsForAllOrigins();
+        });
 
         // Health check endpoint
         app.get("/health", ctx -> ctx.result("ok"));
