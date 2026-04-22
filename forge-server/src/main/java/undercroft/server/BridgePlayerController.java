@@ -55,7 +55,7 @@ import java.util.stream.Collectors;
  */
 public class BridgePlayerController extends PlayerController {
     private static final Logger log = LoggerFactory.getLogger(BridgePlayerController.class);
-    private static final long CHOICE_TIMEOUT_SECONDS = 300; // 5 minutes per decision
+    private static final long CHOICE_TIMEOUT_SECONDS = 1800; // 30 minutes per decision
 
     private final WsContext wsContext;
     private final Gson gson;

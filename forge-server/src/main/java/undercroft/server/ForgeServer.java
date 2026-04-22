@@ -75,6 +75,7 @@ public class ForgeServer {
                         case "start_game" -> handleStartGame(ctx, sessionId, payload);
                         case "choice_response" -> handleChoiceResponse(sessionId, payload);
                         case "concede" -> handleConcede(sessionId);
+                        case "ping" -> {} // Keepalive — no-op
                         default -> sendError(ctx, "Unknown message type: " + type);
                     }
                 } catch (Exception e) {
