@@ -95,9 +95,21 @@ public class BridgePlayerController extends PlayerController {
 
     /**
      * Send a choice request to the client and block until they respond.
+     * Always sends a game_state snapshot first so the client has current board state.
      */
     private JsonObject requestChoice(String choiceType, JsonObject data) {
         if (shutdown) return new JsonObject();
+
+        // Send current game state before every choice so the client always has a fresh snapshot
+        try {
+            Game game = getGame();
+            if (game != null) {
+                JsonObject statePayload = GameStateSerializer.serialize(game, player, gson);
+                ForgeServer.sendMessage(wsContext, "game_state", statePayload);
+            }
+        } catch (Exception e) {
+            log.warn("Failed to send game state before choice: {}", e.getMessage());
+        }
 
         String requestId = String.valueOf(nextRequestId++);
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
