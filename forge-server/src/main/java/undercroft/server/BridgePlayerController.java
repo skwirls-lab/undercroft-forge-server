@@ -7,6 +7,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import forge.LobbyPlayer;
 import forge.ai.ComputerUtil;
+import forge.ai.ComputerUtilMana;
 import forge.card.ColorSet;
 import forge.card.ICardFace;
 import forge.card.mana.ManaCost;
@@ -1040,6 +1041,9 @@ public class BridgePlayerController extends PlayerController {
             if (sa.canPlay()) {
                 sa.resolve();
             }
+        } else if (sa.isManaAbility()) {
+            // Mana abilities don't use the stack — resolve immediately
+            sa.resolve();
         } else {
             ComputerUtil.handlePlayingSpellAbility(player, sa, null);
         }
@@ -1228,7 +1232,8 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt, ManaConversionMatrix matrix, boolean effect) {
-        return false;
+        // Use AI mana payment — auto-taps lands to pay costs
+        return ComputerUtilMana.payManaCost(new Cost(toPay, effect), player, sa, effect);
     }
 
     @Override
@@ -1258,9 +1263,18 @@ public class BridgePlayerController extends PlayerController {
     private CardCollectionView parseCardSelection(JsonObject response, CardCollectionView options, int minRequired) {
         CardCollection result = new CardCollection();
         if (response.has("selectedIds")) {
-            JsonArray ids = response.getAsJsonArray("selectedIds");
-            for (int i = 0; i < ids.size(); i++) {
-                int id = ids.get(i).getAsInt();
+            // Handle both array [1,2] and single number 1 from the client
+            var element = response.get("selectedIds");
+            List<Integer> ids = new ArrayList<>();
+            if (element.isJsonArray()) {
+                JsonArray arr = element.getAsJsonArray();
+                for (int i = 0; i < arr.size(); i++) {
+                    ids.add(arr.get(i).getAsInt());
+                }
+            } else {
+                ids.add(element.getAsInt());
+            }
+            for (int id : ids) {
                 for (Card c : options) {
                     if (c.getId() == id) {
                         result.add(c);

@@ -27,14 +27,15 @@ public class GameStateSerializer {
         state.addProperty("gameId", game.getId());
         state.addProperty("isGameOver", game.isGameOver());
 
-        // Phase/turn info
+        // Phase/turn info — handle null values during mulligan/early game setup
         JsonObject turn = new JsonObject();
-        turn.addProperty("phase", game.getPhaseHandler().getPhase().name());
-        turn.addProperty("activePlayer", game.getPhaseHandler().getPlayerTurn().getName());
-        turn.addProperty("activePlayerId", game.getPhaseHandler().getPlayerTurn().getId());
-        turn.addProperty("turnNumber", game.getPhaseHandler().getTurn());
-        turn.addProperty("priorityPlayer", game.getPhaseHandler().getPriorityPlayer() != null
-                ? game.getPhaseHandler().getPriorityPlayer().getName() : "");
+        var phaseHandler = game.getPhaseHandler();
+        turn.addProperty("phase", phaseHandler.getPhase() != null ? phaseHandler.getPhase().name() : "MULLIGAN");
+        turn.addProperty("activePlayer", phaseHandler.getPlayerTurn() != null ? phaseHandler.getPlayerTurn().getName() : perspective.getName());
+        turn.addProperty("activePlayerId", phaseHandler.getPlayerTurn() != null ? phaseHandler.getPlayerTurn().getId() : perspective.getId());
+        turn.addProperty("turnNumber", phaseHandler.getTurn());
+        turn.addProperty("priorityPlayer", phaseHandler.getPriorityPlayer() != null
+                ? phaseHandler.getPriorityPlayer().getName() : "");
         state.add("turn", turn);
 
         // Players

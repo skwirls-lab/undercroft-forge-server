@@ -56,22 +56,30 @@ public class GameSession {
                 ? startPayload.get("playerName").getAsString()
                 : "Player";
 
+        // Number of AI opponents (default 1, up to 3 for Commander)
+        int aiCount = startPayload.has("aiCount")
+                ? Math.max(1, Math.min(3, startPayload.get("aiCount").getAsInt()))
+                : 1;
+
         // Create registered players
         BridgeLobbyPlayer humanLobby = new BridgeLobbyPlayer(playerName);
         humanLobby.setWsContext(wsContext, gson);
-        LobbyPlayerAi aiLobby = new LobbyPlayerAi("AI Opponent", null);
 
         RegisteredPlayer humanReg = new RegisteredPlayer(humanDeck);
         humanReg.setPlayer(humanLobby);
 
-        // AI gets a random preconstructed deck or the same deck
-        Deck aiDeck = humanDeck; // TODO: Generate proper AI deck
-        RegisteredPlayer aiReg = new RegisteredPlayer(aiDeck);
-        aiReg.setPlayer(aiLobby);
-
         List<RegisteredPlayer> players = new ArrayList<>();
         players.add(humanReg);
-        players.add(aiReg);
+
+        // Create AI opponents
+        String[] aiNames = {"AI Opponent", "AI Opponent 2", "AI Opponent 3"};
+        for (int i = 0; i < aiCount; i++) {
+            LobbyPlayerAi aiLobby = new LobbyPlayerAi(aiNames[i], null);
+            Deck aiDeck = humanDeck; // TODO: Generate proper AI decks
+            RegisteredPlayer aiReg = new RegisteredPlayer(aiDeck);
+            aiReg.setPlayer(aiLobby);
+            players.add(aiReg);
+        }
 
         // Game rules — Commander format
         GameRules rules = new GameRules(GameType.Commander);
@@ -82,7 +90,8 @@ public class GameSession {
         // Create match and game
         // createGame() calls IGameEntitiesFactory.createIngamePlayer() on each LobbyPlayer
         // which creates the BridgePlayerController for the human player
-        match = new Match(rules, players, playerName + " vs AI");
+        String matchTitle = playerName + " vs " + aiCount + " AI" + (aiCount > 1 ? "s" : "");
+        match = new Match(rules, players, matchTitle);
         game = match.createGame();
 
         // Get the controller that was created during game initialization
