@@ -1056,7 +1056,22 @@ public class BridgePlayerController extends PlayerController {
                 sa.resolve();
             }
         } else {
-            ComputerUtil.handlePlayingSpellAbility(player, sa, null);
+            // Remember original zone so we can recover on failure
+            final Card source = sa.getHostCard();
+            final ZoneType origZone = (source != null && source.getZone() != null)
+                    ? source.getZone().getZoneType() : ZoneType.Hand;
+
+            boolean success = ComputerUtil.handlePlayingSpellAbility(player, sa, null);
+            if (!success) {
+                // handlePlayingSpellAbility moves card to Stack zone BEFORE paying costs.
+                // If payment fails, the card is orphaned (Forge bug: FIXME in source).
+                // Move it back to the original zone so it doesn't vanish.
+                Card card = sa.getHostCard();
+                if (card != null && card.getZone() != null && card.getZone().is(ZoneType.Stack)) {
+                    log.info("Spell payment failed for {} — returning to {}", card.getName(), origZone);
+                    player.getGame().getAction().moveTo(origZone, card, null);
+                }
+            }
         }
         return true;
     }
