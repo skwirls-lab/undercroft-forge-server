@@ -1258,7 +1258,73 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa, String prompt, ManaConversionMatrix matrix, boolean effect) {
-        // Use AI mana payment — auto-taps lands to pay costs
+        // Interactive mana payment — ask the player which lands to tap, just like Forge desktop.
+        // 1) Gather untapped permanents with mana abilities
+        List<Card> sources = new ArrayList<>();
+        for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
+            if (!c.isTapped()) {
+                for (SpellAbility ma : c.getManaAbilities()) {
+                    if (ma.canPlay()) {
+                        sources.add(c);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If no sources and pool is empty, can't pay
+        if (sources.isEmpty() && player.getManaPool().isEmpty()) {
+            return false;
+        }
+
+        // If there ARE sources, ask the player to pick
+        if (!sources.isEmpty()) {
+            JsonObject data = new JsonObject();
+            data.addProperty("prompt", prompt != null ? prompt : ("Pay mana: " + toPay.toString()));
+            data.addProperty("manaCost", toPay.toString());
+            data.add("sources", serializeCards(sources));
+            data.addProperty("canCancel", true);
+
+            JsonObject response = requestChoice("mana_payment", data);
+
+            // Player cancelled — don't pay
+            if (response.has("cancel") && response.get("cancel").getAsBoolean()) {
+                return false;
+            }
+
+            // Tap selected mana sources — resolve their mana abilities so mana enters pool
+            if (response.has("selectedIds")) {
+                var element = response.get("selectedIds");
+                List<Integer> ids = new ArrayList<>();
+                if (element.isJsonArray()) {
+                    for (var el : element.getAsJsonArray()) ids.add(el.getAsInt());
+                } else {
+                    ids.add(element.getAsInt());
+                }
+
+                for (int cardId : ids) {
+                    for (Card source : sources) {
+                        if (source.getId() == cardId && !source.isTapped()) {
+                            for (SpellAbility ma : source.getManaAbilities()) {
+                                if (ma.canPlay()) {
+                                    ma.setActivatingPlayer(player);
+                                    CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
+                                    if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
+                                        ma.resolve();
+                                    }
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Now pay from the pool (which has mana from the tapped lands + any pre-existing mana).
+        // ComputerUtilMana.payManaCost checks the pool first, so it won't tap extra lands
+        // if the player provided enough.
         return ComputerUtilMana.payManaCost(new Cost(toPay, effect), player, sa, effect);
     }
 
