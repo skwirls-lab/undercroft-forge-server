@@ -6,6 +6,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import forge.LobbyPlayer;
+import forge.ai.ComputerUtil;
 import forge.card.ColorSet;
 import forge.card.ICardFace;
 import forge.card.mana.ManaCost;
@@ -1034,7 +1035,15 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean playChosenSpellAbility(SpellAbility sa) {
-        return true; // Always play the chosen ability
+        // Must actually execute the ability — matching Forge AI's PlayerControllerAi logic
+        if (sa.isLandAbility()) {
+            if (sa.canPlay()) {
+                sa.resolve();
+            }
+        } else {
+            ComputerUtil.handlePlayingSpellAbility(player, sa, null);
+        }
+        return true;
     }
 
     @Override
