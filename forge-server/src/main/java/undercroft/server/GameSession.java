@@ -65,7 +65,8 @@ public class GameSession {
         BridgeLobbyPlayer humanLobby = new BridgeLobbyPlayer(playerName);
         humanLobby.setWsContext(wsContext, gson);
 
-        RegisteredPlayer humanReg = new RegisteredPlayer(humanDeck);
+        // Use forCommander() to set 40 life and assign commander from deck's Commander section
+        RegisteredPlayer humanReg = RegisteredPlayer.forCommander(humanDeck);
         humanReg.setPlayer(humanLobby);
 
         List<RegisteredPlayer> players = new ArrayList<>();
@@ -76,13 +77,14 @@ public class GameSession {
         for (int i = 0; i < aiCount; i++) {
             LobbyPlayerAi aiLobby = new LobbyPlayerAi(aiNames[i], null);
             Deck aiDeck = humanDeck; // TODO: Generate proper AI decks
-            RegisteredPlayer aiReg = new RegisteredPlayer(aiDeck);
+            RegisteredPlayer aiReg = RegisteredPlayer.forCommander(aiDeck);
             aiReg.setPlayer(aiLobby);
             players.add(aiReg);
         }
 
         // Game rules — Commander format
         GameRules rules = new GameRules(GameType.Commander);
+        rules.addAppliedVariant(GameType.Commander); // Required: hasCommander() checks appliedVariants, not gameType
         rules.setPlayForAnte(false);
         rules.setManaBurn(false);
         rules.setGamesPerMatch(1);

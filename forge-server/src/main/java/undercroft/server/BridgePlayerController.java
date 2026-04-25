@@ -6,6 +6,7 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import forge.LobbyPlayer;
+import forge.ai.AiCostDecision;
 import forge.ai.ComputerUtil;
 import forge.ai.ComputerUtilMana;
 import forge.card.ColorSet;
@@ -21,6 +22,7 @@ import forge.game.combat.Combat;
 import forge.game.cost.Cost;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
+import forge.game.cost.CostPayment;
 import forge.game.keyword.KeywordInterface;
 import forge.game.mana.Mana;
 import forge.game.mana.ManaConversionMatrix;
@@ -1042,8 +1044,17 @@ public class BridgePlayerController extends PlayerController {
                 sa.resolve();
             }
         } else if (sa.isManaAbility()) {
-            // Mana abilities don't use the stack — resolve immediately
-            sa.resolve();
+            // Mana abilities don't use the stack — pay costs (tap), then resolve immediately
+            sa.setActivatingPlayer(player);
+            final Cost cost = sa.getPayCosts();
+            if (cost != null) {
+                CostPayment payment = new CostPayment(cost, sa);
+                if (payment.payComputerCosts(new AiCostDecision(player, sa, false))) {
+                    sa.resolve();
+                }
+            } else {
+                sa.resolve();
+            }
         } else {
             ComputerUtil.handlePlayingSpellAbility(player, sa, null);
         }
