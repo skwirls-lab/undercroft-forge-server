@@ -1135,7 +1135,7 @@ public class BridgePlayerController extends PlayerController {
             // handlePlayingSpellAbility uses AiCostDecision which bypasses PlayerController.payManaCost.
             // So we ask the player to tap lands here; mana enters the pool, and ComputerUtilMana
             // (called inside handlePlayingSpellAbility) will find it and pay from pool.
-            ManaCost manaCost = sa.getManaCost();
+            ManaCost manaCost = sa.getPayCosts() != null ? sa.getPayCosts().getTotalMana() : ManaCost.NO_COST;
             if (manaCost != null && !manaCost.isNoCost() && manaCost.getCMC() > 0) {
                 boolean paid = askPlayerToTapLandsForMana(manaCost, sa);
                 if (!paid) {
