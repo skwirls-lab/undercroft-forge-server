@@ -1037,73 +1037,87 @@ public class BridgePlayerController extends PlayerController {
     }
 
     /**
-     * Ask the player which lands to tap for mana. Taps them (mana enters pool)
-     * but does NOT spend the mana — that's left for ComputerUtilMana inside handlePlayingSpellAbility.
+     * Forge-style interactive mana payment: player clicks lands on the battlefield
+     * one at a time. Each click taps the land and adds mana to the pool.
+     * Automatically stops when the pool has enough mana to cover the cost.
      * Returns false if the player cancels.
      */
     private boolean askPlayerToTapLandsForMana(ManaCost cost, SpellAbility sa) {
-        // Gather untapped permanents that have mana abilities.
-        // Don't check canPlay() here — Forge's state machine may reject mana abilities
-        // during playChosenSpellAbility, but we know they're valid to tap for mana.
-        List<Card> sources = new ArrayList<>();
-        for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
-            if (!c.isTapped() && !c.getManaAbilities().isEmpty()) {
-                sources.add(c);
-            }
-        }
+        int cmc = cost.getCMC();
+        int maxIterations = Math.max(cmc + 5, 20); // Safety limit
 
-        log.info("askPlayerToTapLandsForMana: cost={} sources={} poolEmpty={}",
-                cost, sources.size(), player.getManaPool().isEmpty());
-
-        if (sources.isEmpty() && player.getManaPool().isEmpty()) {
-            return false; // Can't pay at all
-        }
-
-        if (sources.isEmpty()) {
-            return true; // No sources to tap, but pool might have enough — let engine try
-        }
-
-        JsonObject data = new JsonObject();
-        data.addProperty("prompt", "Pay " + cost + " for " + sa.getHostCard().getName());
-        data.addProperty("manaCost", cost.toString());
-        data.add("sources", serializeCards(sources));
-        data.addProperty("canCancel", true);
-
-        JsonObject response = requestChoice("mana_payment", data);
-
-        if (response.has("cancel") && response.get("cancel").getAsBoolean()) {
-            return false;
-        }
-
-        // Tap selected mana sources — resolve their mana abilities so mana enters pool
-        if (response.has("selectedIds")) {
-            var element = response.get("selectedIds");
-            List<Integer> ids = new ArrayList<>();
-            if (element.isJsonArray()) {
-                for (var el : element.getAsJsonArray()) ids.add(el.getAsInt());
-            } else {
-                ids.add(element.getAsInt());
+        for (int i = 0; i < maxIterations; i++) {
+            // Check if pool already has enough mana
+            int poolTotal = getPoolManaTotal();
+            if (poolTotal >= cmc) {
+                log.info("Pool has enough mana ({} >= {}), proceeding", poolTotal, cmc);
+                return true;
             }
 
-            for (int cardId : ids) {
+            // Gather untapped permanents with mana abilities
+            List<Card> sources = new ArrayList<>();
+            for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.isTapped() && !c.getManaAbilities().isEmpty()) {
+                    sources.add(c);
+                }
+            }
+
+            if (sources.isEmpty()) {
+                log.info("No more untapped mana sources, pool={}, proceeding", poolTotal);
+                return true; // Let engine try with what's in pool
+            }
+
+            // Send single-land choice — player clicks ONE land on the battlefield
+            JsonObject data = new JsonObject();
+            data.addProperty("manaCost", cost.toString());
+            data.addProperty("spellName", sa.getHostCard().getName());
+            data.addProperty("poolMana", poolTotal);
+            data.addProperty("costCMC", cmc);
+            JsonArray sourceIds = new JsonArray();
+            for (Card c : sources) sourceIds.add(c.getId());
+            data.add("sourceIds", sourceIds);
+            data.addProperty("canCancel", true);
+
+            JsonObject response = requestChoice("mana_payment", data);
+
+            if (response.has("cancel") && response.get("cancel").getAsBoolean()) {
+                log.info("Player cancelled mana payment for {}", sa.getHostCard().getName());
+                return false;
+            }
+
+            if (response.has("cardId")) {
+                int cardId = response.get("cardId").getAsInt();
                 for (Card source : sources) {
-                    if (source.getId() == cardId && !source.isTapped()) {
-                        // Pick the first mana ability and activate it
-                        for (SpellAbility ma : source.getManaAbilities()) {
-                            ma.setActivatingPlayer(player);
-                            CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
-                            if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
-                                ma.resolve();
-                            }
-                            break;
-                        }
+                    if (source.getId() == cardId) {
+                        activateFirstManaAbility(source);
+                        log.info("Tapped {} for mana (pool now {})", source.getName(), getPoolManaTotal());
                         break;
                     }
                 }
             }
         }
 
-        return true; // Player confirmed — pool should now have mana
+        return true; // Safety: let engine try
+    }
+
+    private int getPoolManaTotal() {
+        return player.getManaPool().getAmountOfColor((byte) 1)  // W
+             + player.getManaPool().getAmountOfColor((byte) 2)  // U
+             + player.getManaPool().getAmountOfColor((byte) 4)  // B
+             + player.getManaPool().getAmountOfColor((byte) 8)  // R
+             + player.getManaPool().getAmountOfColor((byte) 16) // G
+             + player.getManaPool().getAmountOfColor((byte) 0); // C
+    }
+
+    private void activateFirstManaAbility(Card source) {
+        for (SpellAbility ma : source.getManaAbilities()) {
+            ma.setActivatingPlayer(player);
+            CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
+            if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
+                ma.resolve();
+            }
+            break; // Only activate the first one
+        }
     }
 
     @Override
