@@ -1036,6 +1036,76 @@ public class BridgePlayerController extends PlayerController {
         return null; // Pass priority by default
     }
 
+    /**
+     * Ask the player which lands to tap for mana. Taps them (mana enters pool)
+     * but does NOT spend the mana — that's left for ComputerUtilMana inside handlePlayingSpellAbility.
+     * Returns false if the player cancels.
+     */
+    private boolean askPlayerToTapLandsForMana(ManaCost cost, SpellAbility sa) {
+        List<Card> sources = new ArrayList<>();
+        for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
+            if (!c.isTapped()) {
+                for (SpellAbility ma : c.getManaAbilities()) {
+                    if (ma.canPlay()) {
+                        sources.add(c);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (sources.isEmpty() && player.getManaPool().isEmpty()) {
+            return false; // Can't pay at all
+        }
+
+        if (sources.isEmpty()) {
+            return true; // No sources to tap, but pool might have enough — let engine try
+        }
+
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", "Pay " + cost + " for " + sa.getHostCard().getName());
+        data.addProperty("manaCost", cost.toString());
+        data.add("sources", serializeCards(sources));
+        data.addProperty("canCancel", true);
+
+        JsonObject response = requestChoice("mana_payment", data);
+
+        if (response.has("cancel") && response.get("cancel").getAsBoolean()) {
+            return false;
+        }
+
+        // Tap selected mana sources — resolve their mana abilities so mana enters pool
+        if (response.has("selectedIds")) {
+            var element = response.get("selectedIds");
+            List<Integer> ids = new ArrayList<>();
+            if (element.isJsonArray()) {
+                for (var el : element.getAsJsonArray()) ids.add(el.getAsInt());
+            } else {
+                ids.add(element.getAsInt());
+            }
+
+            for (int cardId : ids) {
+                for (Card source : sources) {
+                    if (source.getId() == cardId && !source.isTapped()) {
+                        for (SpellAbility ma : source.getManaAbilities()) {
+                            if (ma.canPlay()) {
+                                ma.setActivatingPlayer(player);
+                                CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
+                                if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
+                                    ma.resolve();
+                                }
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        return true; // Player confirmed — pool should now have mana
+    }
+
     @Override
     public boolean playChosenSpellAbility(SpellAbility sa) {
         // Must actually execute the ability — matching Forge AI's PlayerControllerAi logic
@@ -1060,6 +1130,19 @@ public class BridgePlayerController extends PlayerController {
             final Card source = sa.getHostCard();
             final ZoneType origZone = (source != null && source.getZone() != null)
                     ? source.getZone().getZoneType() : ZoneType.Hand;
+
+            // --- Interactive mana payment BEFORE handlePlayingSpellAbility ---
+            // handlePlayingSpellAbility uses AiCostDecision which bypasses PlayerController.payManaCost.
+            // So we ask the player to tap lands here; mana enters the pool, and ComputerUtilMana
+            // (called inside handlePlayingSpellAbility) will find it and pay from pool.
+            ManaCost manaCost = sa.getManaCost();
+            if (manaCost != null && !manaCost.isNoCost() && manaCost.getCMC() > 0) {
+                boolean paid = askPlayerToTapLandsForMana(manaCost, sa);
+                if (!paid) {
+                    log.info("Player cancelled mana payment for {}", source.getName());
+                    return true; // Cancelled — card stays in hand, game continues
+                }
+            }
 
             boolean success = ComputerUtil.handlePlayingSpellAbility(player, sa, null);
             if (!success) {
