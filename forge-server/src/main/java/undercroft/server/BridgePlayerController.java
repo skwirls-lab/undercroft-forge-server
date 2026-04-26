@@ -1051,6 +1051,14 @@ public class BridgePlayerController extends PlayerController {
         log.info("askPlayerToTapLandsForMana: cost={} cmc={} spell={}", cost, cmc, sa.getHostCard().getName());
         int maxIterations = Math.max(cmc + 5, 20); // Safety limit
 
+        // Diagnostic: log what's on the battlefield
+        List<Card> allBF = new ArrayList<>(player.getCardsIn(ZoneType.Battlefield));
+        log.info("askPlayerToTapLandsForMana: battlefield has {} permanents", allBF.size());
+        for (Card c : allBF) {
+            log.info("  BF card: {} (id={}) tapped={} manaAbilities={}",
+                c.getName(), c.getId(), c.isTapped(), c.getManaAbilities().size());
+        }
+
         for (int i = 0; i < maxIterations; i++) {
             // Check if pool already has enough mana
             int poolTotal = getPoolManaTotal();
@@ -1068,6 +1076,11 @@ public class BridgePlayerController extends PlayerController {
             }
 
             if (sources.isEmpty()) {
+                if (i == 0 && poolTotal == 0) {
+                    // First iteration, no sources and no mana — player simply can't pay
+                    log.info("No mana sources available and pool is empty — cannot pay, returning false");
+                    return false; // Cancel: card stays in hand
+                }
                 log.info("No more untapped mana sources, pool={}, proceeding", poolTotal);
                 return true; // Let engine try with what's in pool
             }
