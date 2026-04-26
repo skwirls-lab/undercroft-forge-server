@@ -1042,17 +1042,18 @@ public class BridgePlayerController extends PlayerController {
      * Returns false if the player cancels.
      */
     private boolean askPlayerToTapLandsForMana(ManaCost cost, SpellAbility sa) {
+        // Gather untapped permanents that have mana abilities.
+        // Don't check canPlay() here — Forge's state machine may reject mana abilities
+        // during playChosenSpellAbility, but we know they're valid to tap for mana.
         List<Card> sources = new ArrayList<>();
         for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
-            if (!c.isTapped()) {
-                for (SpellAbility ma : c.getManaAbilities()) {
-                    if (ma.canPlay()) {
-                        sources.add(c);
-                        break;
-                    }
-                }
+            if (!c.isTapped() && !c.getManaAbilities().isEmpty()) {
+                sources.add(c);
             }
         }
+
+        log.info("askPlayerToTapLandsForMana: cost={} sources={} poolEmpty={}",
+                cost, sources.size(), player.getManaPool().isEmpty());
 
         if (sources.isEmpty() && player.getManaPool().isEmpty()) {
             return false; // Can't pay at all
@@ -1087,15 +1088,14 @@ public class BridgePlayerController extends PlayerController {
             for (int cardId : ids) {
                 for (Card source : sources) {
                     if (source.getId() == cardId && !source.isTapped()) {
+                        // Pick the first mana ability and activate it
                         for (SpellAbility ma : source.getManaAbilities()) {
-                            if (ma.canPlay()) {
-                                ma.setActivatingPlayer(player);
-                                CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
-                                if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
-                                    ma.resolve();
-                                }
-                                break;
+                            ma.setActivatingPlayer(player);
+                            CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
+                            if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
+                                ma.resolve();
                             }
+                            break;
                         }
                         break;
                     }
