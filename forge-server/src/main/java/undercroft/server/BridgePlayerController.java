@@ -1055,8 +1055,10 @@ public class BridgePlayerController extends PlayerController {
         List<Card> allBF = new ArrayList<>(player.getCardsIn(ZoneType.Battlefield));
         log.info("askPlayerToTapLandsForMana: battlefield has {} permanents", allBF.size());
         for (Card c : allBF) {
-            log.info("  BF card: {} (id={}) tapped={} manaAbilities={}",
-                c.getName(), c.getId(), c.isTapped(), c.getManaAbilities().size());
+            // Use the same method the AI uses to find mana abilities
+            List<SpellAbility> aiMana = ComputerUtilMana.getAIPlayableMana(c);
+            log.info("  BF card: {} (id={}) tapped={} getManaAbilities={} aiPlayableMana={}",
+                c.getName(), c.getId(), c.isTapped(), c.getManaAbilities().size(), aiMana.size());
         }
 
         for (int i = 0; i < maxIterations; i++) {
@@ -1067,10 +1069,12 @@ public class BridgePlayerController extends PlayerController {
                 return true;
             }
 
-            // Gather untapped permanents with mana abilities
+            // Use ComputerUtilMana.getAIPlayableMana — same method the AI uses.
+            // Card.getManaAbilities() returns 0 for basic lands because intrinsic
+            // abilities require full static-layer resolution. getAIPlayableMana handles this.
             List<Card> sources = new ArrayList<>();
             for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
-                if (!c.isTapped() && !c.getManaAbilities().isEmpty()) {
+                if (!c.isTapped() && !ComputerUtilMana.getAIPlayableMana(c).isEmpty()) {
                     sources.add(c);
                 }
             }
@@ -1128,11 +1132,20 @@ public class BridgePlayerController extends PlayerController {
     }
 
     private void activateFirstManaAbility(Card source) {
-        for (SpellAbility ma : source.getManaAbilities()) {
+        // Use getAIPlayableMana — same as AI, handles basic land intrinsic abilities
+        List<SpellAbility> manaAbilities = ComputerUtilMana.getAIPlayableMana(source);
+        if (manaAbilities.isEmpty()) {
+            // Fallback: try getManaAbilities() just in case
+            manaAbilities = new ArrayList<>(source.getManaAbilities());
+        }
+        for (SpellAbility ma : manaAbilities) {
             ma.setActivatingPlayer(player);
             CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
             if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
                 ma.resolve();
+                log.info("Activated mana ability on {} — pool now {}", source.getName(), getPoolManaTotal());
+            } else {
+                log.warn("Failed to pay cost for mana ability on {}", source.getName());
             }
             break; // Only activate the first one
         }
