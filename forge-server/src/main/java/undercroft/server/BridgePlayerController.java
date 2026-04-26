@@ -1135,13 +1135,40 @@ public class BridgePlayerController extends PlayerController {
             // handlePlayingSpellAbility uses AiCostDecision which bypasses PlayerController.payManaCost.
             // So we ask the player to tap lands here; mana enters the pool, and ComputerUtilMana
             // (called inside handlePlayingSpellAbility) will find it and pay from pool.
-            ManaCost manaCost = sa.getPayCosts() != null ? sa.getPayCosts().getTotalMana() : ManaCost.NO_COST;
-            if (manaCost != null && !manaCost.isNoCost() && manaCost.getCMC() > 0) {
-                boolean paid = askPlayerToTapLandsForMana(manaCost, sa);
-                if (!paid) {
-                    log.info("Player cancelled mana payment for {}", source.getName());
-                    return true; // Cancelled — card stays in hand, game continues
+            try {
+                int cmc = 0;
+                try {
+                    Cost costs = sa.getPayCosts();
+                    if (costs != null && costs.getCostMana() != null) {
+                        ManaCost manaCost = costs.getCostMana().getManaCostFor(sa);
+                        if (manaCost != null) {
+                            cmc = manaCost.getCMC();
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("Error reading mana cost for {}: {}", source.getName(), e.getMessage());
+                    // Fallback: check card's own mana cost
+                    cmc = source.getCMC();
                 }
+
+                log.info("playChosenSpellAbility: {} cmc={} origZone={}", source.getName(), cmc, origZone);
+
+                if (cmc > 0) {
+                    ManaCost displayCost;
+                    try {
+                        displayCost = sa.getPayCosts().getCostMana().getManaCostFor(sa);
+                    } catch (Exception e) {
+                        displayCost = source.getManaCost();
+                    }
+                    boolean paid = askPlayerToTapLandsForMana(displayCost, sa);
+                    if (!paid) {
+                        log.info("Player cancelled mana payment for {}", source.getName());
+                        return true; // Cancelled — card stays in hand, game continues
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Error in interactive mana payment for {}: {}", source.getName(), e.getMessage(), e);
+                // Fall through to handlePlayingSpellAbility — it will auto-pay
             }
 
             boolean success = ComputerUtil.handlePlayingSpellAbility(player, sa, null);
