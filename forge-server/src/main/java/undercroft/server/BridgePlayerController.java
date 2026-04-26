@@ -1069,7 +1069,7 @@ public class BridgePlayerController extends PlayerController {
                 Card card = sa.getHostCard();
                 if (card != null && card.getZone() != null && card.getZone().is(ZoneType.Stack)) {
                     log.info("Spell payment failed for {} — returning to {}", card.getName(), origZone);
-                    player.getGame().getAction().moveTo(origZone, card, null);
+                    player.getGame().getAction().moveTo(player.getZone(origZone), card, null);
                 }
             }
         }
