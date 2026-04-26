@@ -1043,7 +1043,12 @@ public class BridgePlayerController extends PlayerController {
      * Returns false if the player cancels.
      */
     private boolean askPlayerToTapLandsForMana(ManaCost cost, SpellAbility sa) {
+        if (cost == null) {
+            log.warn("askPlayerToTapLandsForMana: cost is null, skipping");
+            return true;
+        }
         int cmc = cost.getCMC();
+        log.info("askPlayerToTapLandsForMana: cost={} cmc={} spell={}", cost, cmc, sa.getHostCard().getName());
         int maxIterations = Math.max(cmc + 5, 20); // Safety limit
 
         for (int i = 0; i < maxIterations; i++) {
@@ -1168,12 +1173,24 @@ public class BridgePlayerController extends PlayerController {
                 log.info("playChosenSpellAbility: {} cmc={} origZone={}", source.getName(), cmc, origZone);
 
                 if (cmc > 0) {
-                    ManaCost displayCost;
+                    // Use getTotalMana() — it never returns null (returns ManaCost.ZERO)
+                    ManaCost displayCost = ManaCost.NO_COST;
                     try {
-                        displayCost = sa.getPayCosts().getCostMana().getManaCostFor(sa);
+                        Cost payCosts = sa.getPayCosts();
+                        if (payCosts != null) {
+                            displayCost = payCosts.getTotalMana();
+                        }
                     } catch (Exception e) {
+                        log.warn("Error extracting display cost for {}: {}", source.getName(), e.getMessage());
+                    }
+                    // Final fallback: use card CMC as generic cost
+                    if (displayCost == null || displayCost.equals(ManaCost.NO_COST) || displayCost.equals(ManaCost.ZERO)) {
                         displayCost = source.getManaCost();
                     }
+                    if (displayCost == null) {
+                        displayCost = ManaCost.get(cmc); // generic mana equal to CMC
+                    }
+                    log.info("About to call askPlayerToTapLandsForMana: displayCost={} cmc={}", displayCost, cmc);
                     boolean paid = askPlayerToTapLandsForMana(displayCost, sa);
                     if (!paid) {
                         log.info("Player cancelled mana payment for {}", source.getName());
