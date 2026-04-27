@@ -22,11 +22,13 @@ import forge.game.combat.Combat;
 import forge.game.cost.Cost;
 import forge.game.cost.CostPart;
 import forge.game.cost.CostPartMana;
+import forge.game.cost.CostAdjustment;
 import forge.game.cost.CostPayment;
 import forge.game.keyword.KeywordInterface;
 import forge.game.mana.Mana;
 import forge.game.mana.ManaConversionMatrix;
 import forge.game.mana.ManaCostBeingPaid;
+import forge.card.mana.ManaAtom;
 import forge.game.player.*;
 import forge.game.replacement.ReplacementEffect;
 import forge.game.spellability.*;
@@ -1036,268 +1038,132 @@ public class BridgePlayerController extends PlayerController {
         return null; // Pass priority by default
     }
 
-    /**
-     * Forge-style interactive mana payment: player clicks lands on the battlefield
-     * one at a time. Each click taps the land and adds mana to the pool.
-     * Automatically stops when the pool has enough mana to cover the cost.
-     * Returns false if the player cancels.
-     */
-    private boolean askPlayerToTapLandsForMana(ManaCost cost, SpellAbility sa) {
-        if (cost == null) {
-            log.warn("askPlayerToTapLandsForMana: cost is null, skipping");
+    // =====================================================================
+    // payManaCost — Forge's built-in hook for interactive mana payment.
+    // This is called by CostPartMana.payAsDecided() during spell casting.
+    // Mirrors PlayerControllerHuman.payManaCost → HumanPlay.payManaCost.
+    // =====================================================================
+    @Override
+    public boolean payManaCost(ManaCost toPay, CostPartMana costPartMana, SpellAbility sa,
+                               String prompt, ManaConversionMatrix matrix, boolean effect) {
+        log.info("payManaCost called: toPay={} spell={}", toPay, sa.getHostCard().getName());
+
+        ManaCostBeingPaid manaCost = new ManaCostBeingPaid(toPay);
+        CostAdjustment.adjust(manaCost, sa, player, new CardCollection(), false, effect);
+
+        if (manaCost.isPaid()) {
+            log.info("payManaCost: cost already paid (0 or reduced to 0)");
             return true;
         }
-        int cmc = cost.getCMC();
-        log.info("askPlayerToTapLandsForMana: cost={} cmc={} spell={}", cost, cmc, sa.getHostCard().getName());
-        int maxIterations = Math.max(cmc + 5, 20); // Safety limit
 
-        // Diagnostic: log what's on the battlefield
-        List<Card> allBF = new ArrayList<>(player.getCardsIn(ZoneType.Battlefield));
-        log.info("askPlayerToTapLandsForMana: battlefield has {} permanents", allBF.size());
-        for (Card c : allBF) {
-            // Use the same method the AI uses to find mana abilities
-            List<SpellAbility> aiMana = ComputerUtilMana.getAIPlayableMana(c);
-            log.info("  BF card: {} (id={}) tapped={} getManaAbilities={} aiPlayableMana={}",
-                c.getName(), c.getId(), c.isTapped(), c.getManaAbilities().size(), aiMana.size());
+        // Diagnostic: check what getManaAbilities returns for each battlefield permanent
+        for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
+            if (!c.isTapped()) {
+                log.info("  BF card: {} (id={}) type={} isLand={} subtypes={} manaAbilities={}",
+                    c.getName(), c.getId(), c.getType(),
+                    c.getType().isLand(),
+                    c.getType().getSubtypes(),
+                    c.getManaAbilities().size());
+            }
         }
 
+        int maxIterations = 20;
         for (int i = 0; i < maxIterations; i++) {
-            // Check if pool already has enough mana
-            int poolTotal = getPoolManaTotal();
-            if (poolTotal >= cmc) {
-                log.info("Pool has enough mana ({} >= {}), proceeding", poolTotal, cmc);
+            if (manaCost.isPaid()) {
+                log.info("payManaCost: fully paid after {} taps", i);
                 return true;
             }
 
-            // Find untapped mana sources. Try multiple methods since
-            // getManaAbilities() may return 0 for basic lands if static layers
-            // haven't fully initialized their intrinsic abilities.
+            // Gather untapped cards with mana abilities (same as InputPayMana.getAllManaAbilities)
             List<Card> sources = new ArrayList<>();
             for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
-                if (!c.isTapped() && isUntappedManaSource(c)) {
-                    sources.add(c);
+                if (!c.isTapped()) {
+                    List<SpellAbility> manaAbs = new ArrayList<>();
+                    for (SpellAbility ma : c.getManaAbilities()) {
+                        ma.setActivatingPlayer(player);
+                        if (ma.canPlay(true)) {
+                            manaAbs.add(ma);
+                        }
+                    }
+                    if (!manaAbs.isEmpty()) {
+                        sources.add(c);
+                    }
                 }
             }
 
             if (sources.isEmpty()) {
-                if (i == 0 && poolTotal == 0) {
-                    // First iteration, no sources and no mana — player simply can't pay
-                    log.info("No mana sources available and pool is empty — cannot pay, returning false");
-                    return false; // Cancel: card stays in hand
+                // Try paying from pool first (e.g. mana already floating)
+                boolean paidFromPool = false;
+                for (byte color : ManaAtom.MANATYPES) {
+                    while (manaCost.isAnyPartPayableWith(color, player.getManaPool()) &&
+                           player.getManaPool().tryPayCostWithColor(color, sa, manaCost, sa.getPayingMana())) {
+                        paidFromPool = true;
+                        if (manaCost.isPaid()) break;
+                    }
+                    if (manaCost.isPaid()) break;
                 }
-                log.info("No more untapped mana sources, pool={}, proceeding", poolTotal);
-                return true; // Let engine try with what's in pool
+                if (manaCost.isPaid()) {
+                    log.info("payManaCost: paid from pool");
+                    return true;
+                }
+                log.info("payManaCost: no untapped mana sources and pool insufficient — cannot pay");
+                return false;
             }
 
-            // Send single-land choice — player clicks ONE land on the battlefield
+            // Send mana_payment choice to client
             JsonObject data = new JsonObject();
-            data.addProperty("manaCost", cost.toString());
+            data.addProperty("manaCost", manaCost.toString());
             data.addProperty("spellName", sa.getHostCard().getName());
-            data.addProperty("poolMana", poolTotal);
-            data.addProperty("costCMC", cmc);
+            data.addProperty("canCancel", true);
             JsonArray sourceIds = new JsonArray();
             for (Card c : sources) sourceIds.add(c.getId());
             data.add("sourceIds", sourceIds);
-            data.addProperty("canCancel", true);
 
             JsonObject response = requestChoice("mana_payment", data);
 
             if (response.has("cancel") && response.get("cancel").getAsBoolean()) {
-                log.info("Player cancelled mana payment for {}", sa.getHostCard().getName());
+                log.info("payManaCost: player cancelled");
                 return false;
             }
 
             if (response.has("cardId")) {
                 int cardId = response.get("cardId").getAsInt();
-                for (Card source : sources) {
-                    if (source.getId() == cardId) {
-                        activateFirstManaAbility(source);
-                        log.info("Tapped {} for mana (pool now {})", source.getName(), getPoolManaTotal());
+                Card chosen = null;
+                for (Card c : sources) {
+                    if (c.getId() == cardId) { chosen = c; break; }
+                }
+                if (chosen != null) {
+                    // Activate mana ability — same as InputPayMana.activateManaAbility
+                    for (SpellAbility ma : chosen.getManaAbilities()) {
+                        ma.setActivatingPlayer(player);
+                        if (!ma.canPlay(true)) continue;
+
+                        // Pay tap cost and resolve (same as HumanPlay.playSpellAbility for mana)
+                        CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
+                        if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
+                            ma.resolve();
+                            // Apply produced mana to the cost being paid
+                            player.getManaPool().payManaFromAbility(sa, manaCost, ma);
+                            log.info("payManaCost: tapped {} — remaining={}", chosen.getName(), manaCost);
+                        }
                         break;
                     }
                 }
             }
         }
 
-        return true; // Safety: let engine try
-    }
-
-    private int getPoolManaTotal() {
-        return player.getManaPool().getAmountOfColor((byte) 1)  // W
-             + player.getManaPool().getAmountOfColor((byte) 2)  // U
-             + player.getManaPool().getAmountOfColor((byte) 4)  // B
-             + player.getManaPool().getAmountOfColor((byte) 8)  // R
-             + player.getManaPool().getAmountOfColor((byte) 16) // G
-             + player.getManaPool().getAmountOfColor((byte) 0); // C
-    }
-
-    /**
-     * Check if a card is an untapped mana source using multiple detection methods.
-     */
-    private boolean isUntappedManaSource(Card c) {
-        // Method 1: Forge API
-        if (!ComputerUtilMana.getAIPlayableMana(c).isEmpty()) return true;
-        if (!c.getManaAbilities().isEmpty()) return true;
-        // Method 2: Basic land type detection (fallback when static layers fail)
-        return getBasicLandManaColor(c) != null;
-    }
-
-    /**
-     * Returns the mana color letter for a basic land type, or null if not a basic land.
-     */
-    private String getBasicLandManaColor(Card c) {
-        if (c.getType() == null) return null;
-        if (c.getType().hasSubtype("Plains"))   return "W";
-        if (c.getType().hasSubtype("Island"))   return "U";
-        if (c.getType().hasSubtype("Swamp"))    return "B";
-        if (c.getType().hasSubtype("Mountain")) return "R";
-        if (c.getType().hasSubtype("Forest"))   return "G";
-        return null;
-    }
-
-    private void activateFirstManaAbility(Card source) {
-        // Method 1: Use getAIPlayableMana — same as AI
-        List<SpellAbility> manaAbilities = ComputerUtilMana.getAIPlayableMana(source);
-        if (manaAbilities.isEmpty()) {
-            // Method 2: getManaAbilities()
-            manaAbilities = new ArrayList<>(source.getManaAbilities());
-        }
-
-        if (!manaAbilities.isEmpty()) {
-            for (SpellAbility ma : manaAbilities) {
-                ma.setActivatingPlayer(player);
-                CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
-                if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
-                    ma.resolve();
-                    log.info("Activated mana ability on {} — pool now {}", source.getName(), getPoolManaTotal());
-                } else {
-                    log.warn("Failed to pay cost for mana ability on {}", source.getName());
-                }
-                return;
-            }
-        }
-
-        // Method 3: Basic land fallback — directly construct and activate the ability
-        String color = getBasicLandManaColor(source);
-        if (color != null) {
-            log.info("Using basic land fallback for {} (color={})", source.getName(), color);
-            String abString = "AB$ Mana | Cost$ T | Produced$ " + color
-                + " | SpellDescription$ Add {" + color + "}.";
-            try {
-                SpellAbility manaAb = forge.game.ability.AbilityFactory.getAbility(abString, source);
-                manaAb.setActivatingPlayer(player);
-                // Tap the land manually
-                source.tap(true, null, null);
-                manaAb.resolve();
-                log.info("Basic land fallback: tapped {} for {} — pool now {}",
-                    source.getName(), color, getPoolManaTotal());
-            } catch (Exception e) {
-                log.error("Basic land fallback failed for {}: {}", source.getName(), e.getMessage(), e);
-            }
-        } else {
-            log.warn("No mana ability found for {}", source.getName());
-        }
+        return manaCost.isPaid();
     }
 
     @Override
     public boolean playChosenSpellAbility(SpellAbility sa) {
-        // Must actually execute the ability — matching Forge AI's PlayerControllerAi logic
+        // Match Forge's PlayerControllerAi.playChosenSpellAbility exactly
         if (sa.isLandAbility()) {
-            // Use player.playLand() — the proper Forge API for land plays.
-            // sa.resolve() alone skips static layer updates, so intrinsic mana
-            // abilities (e.g. Mountain → "{T}: Add {R}") never get initialized.
-            final Card land = sa.getHostCard();
-            if (!player.playLand(land, false, sa)) {
-                log.warn("playLand failed for {}", land.getName());
-            } else {
-                // Force static ability recalculation so intrinsic mana abilities are available
-                try {
-                    player.getGame().getAction().checkStaticAbilities();
-                } catch (Exception e) {
-                    log.warn("checkStaticAbilities after playLand: {}", e.getMessage());
-                }
-            }
-        } else if (sa.isManaAbility()) {
-            // Mana abilities don't use the stack — pay costs (tap), then resolve immediately
-            sa.setActivatingPlayer(player);
-            final Cost cost = sa.getPayCosts();
-            if (cost != null) {
-                CostPayment payment = new CostPayment(cost, sa);
-                if (payment.payComputerCosts(new AiCostDecision(player, sa, false))) {
-                    sa.resolve();
-                }
-            } else {
+            if (sa.canPlay()) {
                 sa.resolve();
             }
         } else {
-            // Remember original zone so we can recover on failure
-            final Card source = sa.getHostCard();
-            final ZoneType origZone = (source != null && source.getZone() != null)
-                    ? source.getZone().getZoneType() : ZoneType.Hand;
-
-            // --- Interactive mana payment BEFORE handlePlayingSpellAbility ---
-            // handlePlayingSpellAbility uses AiCostDecision which bypasses PlayerController.payManaCost.
-            // So we ask the player to tap lands here; mana enters the pool, and ComputerUtilMana
-            // (called inside handlePlayingSpellAbility) will find it and pay from pool.
-            try {
-                int cmc = 0;
-                try {
-                    Cost costs = sa.getPayCosts();
-                    if (costs != null && costs.getCostMana() != null) {
-                        ManaCost manaCost = costs.getCostMana().getManaCostFor(sa);
-                        if (manaCost != null) {
-                            cmc = manaCost.getCMC();
-                        }
-                    }
-                } catch (Exception e) {
-                    log.warn("Error reading mana cost for {}: {}", source.getName(), e.getMessage());
-                    // Fallback: check card's own mana cost
-                    cmc = source.getCMC();
-                }
-
-                log.info("playChosenSpellAbility: {} cmc={} origZone={}", source.getName(), cmc, origZone);
-
-                if (cmc > 0) {
-                    // Use getTotalMana() — it never returns null (returns ManaCost.ZERO)
-                    ManaCost displayCost = ManaCost.NO_COST;
-                    try {
-                        Cost payCosts = sa.getPayCosts();
-                        if (payCosts != null) {
-                            displayCost = payCosts.getTotalMana();
-                        }
-                    } catch (Exception e) {
-                        log.warn("Error extracting display cost for {}: {}", source.getName(), e.getMessage());
-                    }
-                    // Final fallback: use card CMC as generic cost
-                    if (displayCost == null || displayCost.equals(ManaCost.NO_COST) || displayCost.equals(ManaCost.ZERO)) {
-                        displayCost = source.getManaCost();
-                    }
-                    if (displayCost == null) {
-                        displayCost = ManaCost.get(cmc); // generic mana equal to CMC
-                    }
-                    log.info("About to call askPlayerToTapLandsForMana: displayCost={} cmc={}", displayCost, cmc);
-                    boolean paid = askPlayerToTapLandsForMana(displayCost, sa);
-                    if (!paid) {
-                        log.info("Player cancelled mana payment for {}", source.getName());
-                        return true; // Cancelled — card stays in hand, game continues
-                    }
-                }
-            } catch (Exception e) {
-                log.error("Error in interactive mana payment for {}: {}", source.getName(), e.getMessage(), e);
-                // Fall through to handlePlayingSpellAbility — it will auto-pay
-            }
-
-            boolean success = ComputerUtil.handlePlayingSpellAbility(player, sa, null);
-            if (!success) {
-                // handlePlayingSpellAbility moves card to Stack zone BEFORE paying costs.
-                // If payment fails, the card is orphaned (Forge bug: FIXME in source).
-                // Move it back to the original zone so it doesn't vanish.
-                Card card = sa.getHostCard();
-                if (card != null && card.getZone() != null && card.getZone().is(ZoneType.Stack)) {
-                    log.info("Spell payment failed for {} — returning to {}", card.getName(), origZone);
-                    player.getGame().getAction().moveTo(player.getZone(origZone), card, null);
-                }
-            }
+            ComputerUtil.handlePlayingSpellAbility(player, sa, null);
         }
         return true;
     }
