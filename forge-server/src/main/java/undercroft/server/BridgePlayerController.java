@@ -1069,12 +1069,12 @@ public class BridgePlayerController extends PlayerController {
                 return true;
             }
 
-            // Use ComputerUtilMana.getAIPlayableMana — same method the AI uses.
-            // Card.getManaAbilities() returns 0 for basic lands because intrinsic
-            // abilities require full static-layer resolution. getAIPlayableMana handles this.
+            // Find untapped mana sources. Try multiple methods since
+            // getManaAbilities() may return 0 for basic lands if static layers
+            // haven't fully initialized their intrinsic abilities.
             List<Card> sources = new ArrayList<>();
             for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
-                if (!c.isTapped() && !ComputerUtilMana.getAIPlayableMana(c).isEmpty()) {
+                if (!c.isTapped() && isUntappedManaSource(c)) {
                     sources.add(c);
                 }
             }
@@ -1131,23 +1131,71 @@ public class BridgePlayerController extends PlayerController {
              + player.getManaPool().getAmountOfColor((byte) 0); // C
     }
 
+    /**
+     * Check if a card is an untapped mana source using multiple detection methods.
+     */
+    private boolean isUntappedManaSource(Card c) {
+        // Method 1: Forge API
+        if (!ComputerUtilMana.getAIPlayableMana(c).isEmpty()) return true;
+        if (!c.getManaAbilities().isEmpty()) return true;
+        // Method 2: Basic land type detection (fallback when static layers fail)
+        return getBasicLandManaColor(c) != null;
+    }
+
+    /**
+     * Returns the mana color letter for a basic land type, or null if not a basic land.
+     */
+    private String getBasicLandManaColor(Card c) {
+        if (c.getType() == null) return null;
+        if (c.getType().hasSubtype("Plains"))   return "W";
+        if (c.getType().hasSubtype("Island"))   return "U";
+        if (c.getType().hasSubtype("Swamp"))    return "B";
+        if (c.getType().hasSubtype("Mountain")) return "R";
+        if (c.getType().hasSubtype("Forest"))   return "G";
+        return null;
+    }
+
     private void activateFirstManaAbility(Card source) {
-        // Use getAIPlayableMana — same as AI, handles basic land intrinsic abilities
+        // Method 1: Use getAIPlayableMana — same as AI
         List<SpellAbility> manaAbilities = ComputerUtilMana.getAIPlayableMana(source);
         if (manaAbilities.isEmpty()) {
-            // Fallback: try getManaAbilities() just in case
+            // Method 2: getManaAbilities()
             manaAbilities = new ArrayList<>(source.getManaAbilities());
         }
-        for (SpellAbility ma : manaAbilities) {
-            ma.setActivatingPlayer(player);
-            CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
-            if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
-                ma.resolve();
-                log.info("Activated mana ability on {} — pool now {}", source.getName(), getPoolManaTotal());
-            } else {
-                log.warn("Failed to pay cost for mana ability on {}", source.getName());
+
+        if (!manaAbilities.isEmpty()) {
+            for (SpellAbility ma : manaAbilities) {
+                ma.setActivatingPlayer(player);
+                CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
+                if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
+                    ma.resolve();
+                    log.info("Activated mana ability on {} — pool now {}", source.getName(), getPoolManaTotal());
+                } else {
+                    log.warn("Failed to pay cost for mana ability on {}", source.getName());
+                }
+                return;
             }
-            break; // Only activate the first one
+        }
+
+        // Method 3: Basic land fallback — directly construct and activate the ability
+        String color = getBasicLandManaColor(source);
+        if (color != null) {
+            log.info("Using basic land fallback for {} (color={})", source.getName(), color);
+            String abString = "AB$ Mana | Cost$ T | Produced$ " + color
+                + " | SpellDescription$ Add {" + color + "}.";
+            try {
+                SpellAbility manaAb = forge.game.ability.AbilityFactory.getAbility(abString, source);
+                manaAb.setActivatingPlayer(player);
+                // Tap the land manually
+                source.tap(true, null, null);
+                manaAb.resolve();
+                log.info("Basic land fallback: tapped {} for {} — pool now {}",
+                    source.getName(), color, getPoolManaTotal());
+            } catch (Exception e) {
+                log.error("Basic land fallback failed for {}: {}", source.getName(), e.getMessage(), e);
+            }
+        } else {
+            log.warn("No mana ability found for {}", source.getName());
         }
     }
 
@@ -1161,6 +1209,13 @@ public class BridgePlayerController extends PlayerController {
             final Card land = sa.getHostCard();
             if (!player.playLand(land, false, sa)) {
                 log.warn("playLand failed for {}", land.getName());
+            } else {
+                // Force static ability recalculation so intrinsic mana abilities are available
+                try {
+                    player.getGame().getAction().checkStaticAbilities();
+                } catch (Exception e) {
+                    log.warn("checkStaticAbilities after playLand: {}", e.getMessage());
+                }
             }
         } else if (sa.isManaAbility()) {
             // Mana abilities don't use the stack — pay costs (tap), then resolve immediately
