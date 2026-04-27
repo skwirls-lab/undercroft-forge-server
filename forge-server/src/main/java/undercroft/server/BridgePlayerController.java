@@ -1155,8 +1155,12 @@ public class BridgePlayerController extends PlayerController {
     public boolean playChosenSpellAbility(SpellAbility sa) {
         // Must actually execute the ability — matching Forge AI's PlayerControllerAi logic
         if (sa.isLandAbility()) {
-            if (sa.canPlay()) {
-                sa.resolve();
+            // Use player.playLand() — the proper Forge API for land plays.
+            // sa.resolve() alone skips static layer updates, so intrinsic mana
+            // abilities (e.g. Mountain → "{T}: Add {R}") never get initialized.
+            final Card land = sa.getHostCard();
+            if (!player.playLand(land, false, sa)) {
+                log.warn("playLand failed for {}", land.getName());
             }
         } else if (sa.isManaAbility()) {
             // Mana abilities don't use the stack — pay costs (tap), then resolve immediately
