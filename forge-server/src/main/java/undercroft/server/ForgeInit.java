@@ -109,6 +109,12 @@ public class ForgeInit {
                     false  // no smart art
             );
 
+            // Load dynamic gamedata — type lists (BasicTypes, LandTypes, CreatureTypes, etc.)
+            // and non-stacking keyword list. Without this, CardType.Constant.BASIC_TYPES is empty
+            // and sanisfySubtypes() strips "Mountain"/"Forest"/etc. from card subtypes,
+            // which breaks intrinsic mana ability detection.
+            forge.model.FModel.loadDynamicGamedata();
+
             CardDb commonCards = data.getCommonCards();
             int cardCount = commonCards.getAllCards().size();
 
