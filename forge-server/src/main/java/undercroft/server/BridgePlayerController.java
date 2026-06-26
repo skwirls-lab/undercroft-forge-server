@@ -1163,15 +1163,73 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean playChosenSpellAbility(SpellAbility sa) {
-        // Match Forge's PlayerControllerAi.playChosenSpellAbility exactly
+        // Use the same flow as HumanPlay.playSpellAbility to ensure proper rollback
+        // when mana payment fails or is cancelled
+        sa.setActivatingPlayer(player);
+        
         if (sa.isLandAbility()) {
             if (sa.canPlay()) {
                 sa.resolve();
             }
-        } else {
-            ComputerUtil.handlePlayingSpellAbility(player, sa, null);
+            return true;
         }
-        return true;
+        
+        // For spells and abilities, use the full payment flow with rollback support
+        // This mirrors HumanPlaySpellAbility.playAbility which handles rollback properly
+        Card source = sa.getHostCard();
+        Game game = player.getGame();
+        
+        // Store zone info for rollback
+        forge.game.zone.Zone fromZone = game.getZoneOf(source);
+        int zonePosition = fromZone != null ? fromZone.getCards().indexOf(source) : 0;
+        
+        // Move spell to stack (will be rolled back if payment fails)
+        if (sa.isSpell() && !source.isCopiedSpell()) {
+            sa.setHostCard(game.getAction().moveToStack(source, sa));
+            sa.changeText();
+        }
+        
+        if (!sa.isCopied()) {
+            sa.resetPaidHash();
+            sa.setPaidLife(0);
+        }
+        
+        Cost abCost = sa.getPayCosts();
+        CostPayment payment = new CostPayment(abCost, sa);
+        
+        sa.clearManaPaid();
+        sa.getPayingManaAbilities().clear();
+        
+        // Check prerequisites and pay costs
+        boolean prerequisitesMet = sa.checkRestrictions(player) &&
+            sa.setupTargets() &&
+            sa.canCastTiming(player) &&
+            sa.isLegalAfterStack();
+        
+        game.getStack().freezeStack(sa);
+        
+        if (prerequisitesMet) {
+            // Use AiCostDecision for cost payment - it will call back to our payManaCost
+            prerequisitesMet = payment.payCost(new AiCostDecision(player, sa, false));
+        }
+        
+        if (!prerequisitesMet) {
+            // Rollback: move card back to original zone
+            log.info("playChosenSpellAbility: rolling back {} to {}", source.getName(), fromZone);
+            GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, payment, source);
+            game.getStack().unfreezeStack();
+            return false;
+        }
+        
+        if (payment.isFullyPaid()) {
+            game.getStack().addAndUnfreeze(sa);
+            return true;
+        }
+        
+        // If we get here, something went wrong - rollback
+        GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, payment, source);
+        game.getStack().unfreezeStack();
+        return false;
     }
 
     @Override
