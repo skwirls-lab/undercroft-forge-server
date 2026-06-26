@@ -988,18 +988,23 @@ public class BridgePlayerController extends PlayerController {
         // This is the main "what do you want to do?" prompt
         // Forge calls this when the player has priority
         // We need to send the full list of legal actions
+        // NOTE: Mana abilities are NOT included here - they are handled separately
+        // during mana payment (see payManaCost method). This matches how Forge works:
+        // you can't just tap lands for mana randomly, only when paying for something.
 
         List<SpellAbility> legalPlays = new ArrayList<>();
         for (Card c : player.getCardsIn(ZoneType.Hand)) {
             for (SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
-                if (sa.canPlay()) {
+                // Exclude mana abilities - they're handled during payment
+                if (!sa.isManaAbility() && sa.canPlay()) {
                     legalPlays.add(sa);
                 }
             }
         }
         for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
             for (SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
-                if (sa.isActivatedAbility() && sa.canPlay()) {
+                // Exclude mana abilities - they're handled during payment
+                if (sa.isActivatedAbility() && !sa.isManaAbility() && sa.canPlay()) {
                     legalPlays.add(sa);
                 }
             }
@@ -1007,7 +1012,8 @@ public class BridgePlayerController extends PlayerController {
         // Command zone (commander)
         for (Card c : player.getCardsIn(ZoneType.Command)) {
             for (SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
-                if (sa.canPlay()) {
+                // Exclude mana abilities - they're handled during payment
+                if (!sa.isManaAbility() && sa.canPlay()) {
                     legalPlays.add(sa);
                 }
             }
