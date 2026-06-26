@@ -609,8 +609,15 @@ public class BridgePlayerController extends PlayerController {
         // Send list of possible attackers to client
         CardCollection possibleAttackers = new CardCollection();
         for (Card c : attacker.getCardsIn(ZoneType.Battlefield)) {
-            if (c.isCreature() && CombatUtil.canAttack(c)) {
-                possibleAttackers.add(c);
+            if (c.isCreature()) {
+                boolean canAttack = CombatUtil.canAttack(c);
+                boolean isSick = c.isSick();
+                boolean hasHaste = c.hasKeyword("Haste");
+                log.info("Creature {} - canAttack: {}, isSick: {}, hasHaste: {}, tapped: {}", 
+                    c.getName(), canAttack, isSick, hasHaste, c.isTapped());
+                if (canAttack) {
+                    possibleAttackers.add(c);
+                }
             }
         }
 
