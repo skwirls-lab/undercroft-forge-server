@@ -81,9 +81,14 @@ public class GameEventForwarder extends IGameEventVisitor.Base<Void> {
     @Override
     public Void visit(GameEventPlayerLivesChanged event) {
         JsonObject data = new JsonObject();
-        data.addProperty("player", event.player() != null ? event.player().getName() : "");
-        data.addProperty("oldLife", event.oldLives());
-        data.addProperty("newLife", event.newLives());
+        String playerName = event.player() != null ? event.player().getName() : "";
+        int oldLife = event.oldLives();
+        int newLife = event.newLives();
+        data.addProperty("player", playerName);
+        data.addProperty("oldLife", oldLife);
+        data.addProperty("newLife", newLife);
+        // Log life changes to help debug unexpected life drain
+        log.info("Life changed: {} {} -> {} (delta: {})", playerName, oldLife, newLife, newLife - oldLife);
         sendEvent("life_changed", data);
         return null;
     }
