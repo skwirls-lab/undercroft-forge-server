@@ -959,15 +959,22 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean mulliganKeepHand(Player player, int cardsToReturn) {
+        CardCollectionView hand = player.getCardsIn(ZoneType.Hand);
+        log.info("Mulligan prompt for {} - cardsToReturn: {}, hand size: {}, cards: {}", 
+            player.getName(), cardsToReturn, hand.size(), 
+            hand.stream().map(Card::getName).collect(java.util.stream.Collectors.joining(", ")));
+        
         JsonObject data = new JsonObject();
         data.addProperty("prompt", cardsToReturn > 0
                 ? "Keep hand? (Return " + cardsToReturn + " card(s) to bottom)"
                 : "Keep hand?");
         data.addProperty("cardsToReturn", cardsToReturn);
-        data.add("hand", serializeCards(player.getCardsIn(ZoneType.Hand)));
+        data.add("hand", serializeCards(hand));
 
         JsonObject response = requestChoice("mulligan", data);
-        return response.has("keep") ? response.get("keep").getAsBoolean() : true;
+        boolean keep = response.has("keep") ? response.get("keep").getAsBoolean() : true;
+        log.info("Mulligan response for {}: keep={}", player.getName(), keep);
+        return keep;
     }
 
     @Override
