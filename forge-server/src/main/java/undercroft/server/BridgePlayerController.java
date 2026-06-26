@@ -1116,14 +1116,21 @@ public class BridgePlayerController extends PlayerController {
                 return false;
             }
 
-            // Send mana_payment choice to client
+            // Send mana_payment choice to client with full card details
             JsonObject data = new JsonObject();
             data.addProperty("manaCost", manaCost.toString());
             data.addProperty("spellName", sa.getHostCard().getName());
             data.addProperty("canCancel", true);
-            JsonArray sourceIds = new JsonArray();
-            for (Card c : sources) sourceIds.add(c.getId());
-            data.add("sourceIds", sourceIds);
+            // Send full card data so frontend can display clickable land buttons
+            JsonArray sourcesArray = new JsonArray();
+            for (Card c : sources) {
+                JsonObject cardObj = new JsonObject();
+                cardObj.addProperty("id", c.getId());
+                cardObj.addProperty("name", c.getName());
+                cardObj.addProperty("type", c.getType().toString());
+                sourcesArray.add(cardObj);
+            }
+            data.add("sources", sourcesArray);
 
             JsonObject response = requestChoice("mana_payment", data);
 
