@@ -383,9 +383,11 @@ public class BridgePlayerController extends PlayerController {
     public boolean chooseTargetsFor(SpellAbility currentAbility) {
         // Send targeting choice to client
         JsonObject data = new JsonObject();
+        String cardName = currentAbility.getHostCard() != null ? currentAbility.getHostCard().getName() : "spell";
+        data.addProperty("prompt", "Choose target for " + cardName);
         data.addProperty("abilityDescription", currentAbility.toString());
         if (currentAbility.getHostCard() != null) {
-            data.addProperty("cardName", currentAbility.getHostCard().getName());
+            data.addProperty("cardName", cardName);
         }
 
         // Get valid targets
@@ -393,6 +395,15 @@ public class BridgePlayerController extends PlayerController {
         TargetRestrictions restrictions = currentAbility.getTargetRestrictions();
         if (restrictions != null) {
             validTargets.addAll(restrictions.getAllCandidates(currentAbility, true));
+        }
+
+        int minTargets = restrictions != null ? restrictions.getMinTargets(currentAbility.getHostCard(), currentAbility) : 0;
+        int maxTargets = restrictions != null ? restrictions.getMaxTargets(currentAbility.getHostCard(), currentAbility) : 1;
+
+        // If targeting is optional and there are no valid targets, skip silently
+        if (validTargets.isEmpty() && minTargets == 0) {
+            log.info("chooseTargetsFor: no valid targets but min=0, skipping targeting for {}", currentAbility);
+            return true;
         }
 
         JsonArray targetsArr = new JsonArray();
@@ -404,8 +415,8 @@ public class BridgePlayerController extends PlayerController {
             targetsArr.add(t);
         }
         data.add("validTargets", targetsArr);
-        data.addProperty("minTargets", restrictions != null ? restrictions.getMinTargets(currentAbility.getHostCard(), currentAbility) : 0);
-        data.addProperty("maxTargets", restrictions != null ? restrictions.getMaxTargets(currentAbility.getHostCard(), currentAbility) : 1);
+        data.addProperty("minTargets", minTargets);
+        data.addProperty("maxTargets", maxTargets);
 
         JsonObject response = requestChoice("choose_targets", data);
 
@@ -421,7 +432,8 @@ public class BridgePlayerController extends PlayerController {
                     }
                 }
             }
-            return !currentAbility.getTargets().isEmpty();
+            // Allow empty selection when targeting is optional (min=0)
+            return currentAbility.getTargets().size() >= minTargets;
         }
         return false;
     }
