@@ -1,7 +1,10 @@
 package undercroft.server;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import forge.StaticData;
+import forge.item.PaperCard;
 import io.javalin.Javalin;
 import io.javalin.websocket.WsContext;
 import org.slf4j.Logger;
@@ -56,6 +59,35 @@ public class ForgeServer {
 
         // Health check endpoint
         app.get("/health", ctx -> ctx.result("ok"));
+
+        // Card verification endpoint — checks which card names exist in Forge's database
+        app.post("/api/check-cards", ctx -> {
+            try {
+                JsonObject body = gson.fromJson(ctx.body(), JsonObject.class);
+                JsonArray names = body.getAsJsonArray("cardNames");
+                JsonObject result = new JsonObject();
+                JsonArray found = new JsonArray();
+                JsonArray notFound = new JsonArray();
+
+                for (int i = 0; i < names.size(); i++) {
+                    String name = names.get(i).getAsString();
+                    PaperCard card = StaticData.instance().getCommonCards().getCard(name);
+                    if (card != null) {
+                        found.add(name);
+                    } else {
+                        notFound.add(name);
+                    }
+                }
+
+                result.add("found", found);
+                result.add("notFound", notFound);
+                ctx.contentType("application/json");
+                ctx.result(result.toString());
+            } catch (Exception e) {
+                log.error("Error checking cards: {}", e.getMessage(), e);
+                ctx.status(400).result("{\"error\": \"" + e.getMessage() + "\"}");
+            }
+        });
 
         app.ws("/game", ws -> {
             ws.onConnect(ctx -> {

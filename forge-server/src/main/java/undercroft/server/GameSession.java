@@ -50,8 +50,8 @@ public class GameSession {
     public void start() {
         running = true;
 
-        // Parse deck from client payload
-        Deck humanDeck = parseDeck(startPayload);
+        // Parse deck from client payload — no padding for human (resolved at import time)
+        Deck humanDeck = parseDeck(startPayload, false);
         String playerName = startPayload.has("playerName")
                 ? startPayload.get("playerName").getAsString()
                 : "Player";
@@ -78,7 +78,7 @@ public class GameSession {
             JsonArray aiDecksArray = startPayload.getAsJsonArray("aiDecks");
             for (int i = 0; i < aiDecksArray.size(); i++) {
                 JsonObject aiDeckPayload = aiDecksArray.get(i).getAsJsonObject();
-                aiDeckList.add(parseDeck(aiDeckPayload));
+                aiDeckList.add(parseDeck(aiDeckPayload, true));
             }
         }
 
@@ -204,7 +204,7 @@ public class GameSession {
      * Parse a deck from the client's JSON payload.
      * Expected format: { "deckList": ["1 Lightning Bolt", "1 Mountain", ...], "commander": "Krenko, Mob Boss" }
      */
-    private Deck parseDeck(JsonObject payload) {
+    private Deck parseDeck(JsonObject payload, boolean padMissing) {
         Deck deck = new Deck("Player Deck");
         int missingCount = 0;
 
@@ -248,8 +248,8 @@ public class GameSession {
             }
         }
 
-        // Pad missing cards with basic lands so the deck always has the right size
-        if (missingCount > 0) {
+        // Pad missing cards with basic lands (AI decks only — human decks resolve at import)
+        if (padMissing && missingCount > 0) {
             String basicLandName = guessBasicLand(payload);
             PaperCard basicLand = StaticData.instance().getCommonCards().getCard(basicLandName);
             if (basicLand != null) {
