@@ -176,7 +176,7 @@ public class GameStateSerializer {
                 JsonObject counters = new JsonObject();
                 for (Map.Entry<CounterType, Integer> entry : c.getCounters().entrySet()) {
                     if (entry.getValue() > 0) {
-                        counters.addProperty(entry.getKey().toString(), entry.getValue());
+                        counters.addProperty(entry.getKey().getName(), entry.getValue());
                     }
                 }
                 card.add("counters", counters);
@@ -203,6 +203,23 @@ public class GameStateSerializer {
                     auras.add(auraObj);
                 }
                 card.add("enchantedBy", auras);
+            }
+
+            // What this card is attached TO (for equipment/auras)
+            if (c.isEquipment() && c.getEquipping() != null) {
+                JsonObject attachedTo = new JsonObject();
+                attachedTo.addProperty("id", c.getEquipping().getId());
+                attachedTo.addProperty("name", c.getEquipping().getName());
+                attachedTo.addProperty("controllerId", c.getEquipping().getController().getId());
+                card.add("attachedTo", attachedTo);
+            }
+            if (c.isAura() && c.getEnchanting() instanceof Card) {
+                Card enchanted = (Card) c.getEnchanting();
+                JsonObject attachedTo = new JsonObject();
+                attachedTo.addProperty("id", enchanted.getId());
+                attachedTo.addProperty("name", enchanted.getName());
+                attachedTo.addProperty("controllerId", enchanted.getController().getId());
+                card.add("attachedTo", attachedTo);
             }
 
             // Keywords (visible ones)
