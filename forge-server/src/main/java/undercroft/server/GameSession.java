@@ -206,6 +206,7 @@ public class GameSession {
      */
     private Deck parseDeck(JsonObject payload) {
         Deck deck = new Deck("Player Deck");
+        int missingCount = 0;
 
         if (payload.has("deckList")) {
             JsonArray deckList = payload.getAsJsonArray("deckList");
@@ -229,6 +230,7 @@ public class GameSession {
                     deck.getOrCreate(DeckSection.Main).add(card, count);
                 } else {
                     log.warn("Card not found in Forge database: {}", cardName);
+                    missingCount += count;
                 }
             }
         }
@@ -246,6 +248,47 @@ public class GameSession {
             }
         }
 
+        // Pad missing cards with basic lands so the deck always has the right size
+        if (missingCount > 0) {
+            String basicLandName = guessBasicLand(payload);
+            PaperCard basicLand = StaticData.instance().getCommonCards().getCard(basicLandName);
+            if (basicLand != null) {
+                deck.getOrCreate(DeckSection.Main).add(basicLand, missingCount);
+                log.info("Padded deck with {} {} to replace {} missing card(s)", missingCount, basicLandName, missingCount);
+            }
+        }
+
         return deck;
+    }
+
+    /**
+     * Guess which basic land to use based on the commander name or deck color hints.
+     * Falls back to "Wastes" if no color can be determined.
+     */
+    private String guessBasicLand(JsonObject payload) {
+        // Check if there's a color hint (sent by AI deck data)
+        if (payload.has("colors")) {
+            String colors = payload.get("colors").getAsString().toUpperCase();
+            if (colors.contains("W")) return "Plains";
+            if (colors.contains("U")) return "Island";
+            if (colors.contains("B")) return "Swamp";
+            if (colors.contains("R")) return "Mountain";
+            if (colors.contains("G")) return "Forest";
+        }
+
+        // Try to infer from the deck list — find the most common basic land already in the list
+        if (payload.has("deckList")) {
+            String[] basics = {"Plains", "Island", "Swamp", "Mountain", "Forest"};
+            JsonArray deckList = payload.getAsJsonArray("deckList");
+            for (String basic : basics) {
+                for (int i = 0; i < deckList.size(); i++) {
+                    if (deckList.get(i).getAsString().contains(basic)) {
+                        return basic;
+                    }
+                }
+            }
+        }
+
+        return "Mountain"; // Safe fallback
     }
 }
