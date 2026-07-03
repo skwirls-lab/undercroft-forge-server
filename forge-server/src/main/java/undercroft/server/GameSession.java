@@ -72,11 +72,21 @@ public class GameSession {
         List<RegisteredPlayer> players = new ArrayList<>();
         players.add(humanReg);
 
-        // Create AI opponents
+        // Parse AI decks from payload (if provided by the client)
+        List<Deck> aiDeckList = new ArrayList<>();
+        if (startPayload.has("aiDecks") && startPayload.get("aiDecks").isJsonArray()) {
+            JsonArray aiDecksArray = startPayload.getAsJsonArray("aiDecks");
+            for (int i = 0; i < aiDecksArray.size(); i++) {
+                JsonObject aiDeckPayload = aiDecksArray.get(i).getAsJsonObject();
+                aiDeckList.add(parseDeck(aiDeckPayload));
+            }
+        }
+
+        // Create AI opponents — use dedicated AI decks if available, otherwise fallback to humanDeck
         String[] aiNames = {"AI Opponent", "AI Opponent 2", "AI Opponent 3"};
         for (int i = 0; i < aiCount; i++) {
             LobbyPlayerAi aiLobby = new LobbyPlayerAi(aiNames[i], null);
-            Deck aiDeck = humanDeck; // TODO: Generate proper AI decks
+            Deck aiDeck = (i < aiDeckList.size()) ? aiDeckList.get(i) : humanDeck;
             RegisteredPlayer aiReg = RegisteredPlayer.forCommander(aiDeck);
             aiReg.setPlayer(aiLobby);
             players.add(aiReg);
