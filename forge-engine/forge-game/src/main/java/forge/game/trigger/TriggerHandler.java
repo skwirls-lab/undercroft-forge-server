@@ -220,7 +220,14 @@ public class TriggerHandler {
     public final void registerActiveTrigger(final Card c, final boolean onlyExtrinsic) {
         for (final Trigger t : c.getTriggers()) {
             if (!onlyExtrinsic || c.isCloned() || !t.isIntrinsic() || TriggerType.Always.equals(t.getMode())) {
-                registerOneTrigger(t);
+                boolean registered = registerOneTrigger(t);
+                if (t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy) {
+                    System.out.println("[TriggerDebug] registerActiveTrigger: card=" + c.getName() + " trigger=" + t.getMode() + " intrinsic=" + t.isIntrinsic() + " registered=" + registered + " zone=" + (game.getZoneOf(c) != null ? game.getZoneOf(c).getZoneType() : "null"));
+                }
+            } else {
+                if (t.getMode() == TriggerType.SpellCast || t.getMode() == TriggerType.SpellCastOrCopy) {
+                    System.out.println("[TriggerDebug] SKIPPED registerActiveTrigger: card=" + c.getName() + " trigger=" + t.getMode() + " onlyExtrinsic=" + onlyExtrinsic + " isIntrinsic=" + t.isIntrinsic() + " isCloned=" + c.isCloned());
+                }
             }
         }
     }
@@ -242,6 +249,16 @@ public class TriggerHandler {
     }
 
     public final void runTrigger(final TriggerType mode, final Map<AbilityKey, Object> runParams, boolean holdTrigger) {
+        if (mode == TriggerType.SpellCast || mode == TriggerType.SpellCastOrCopy) {
+            forge.game.spellability.SpellAbility castSA = (forge.game.spellability.SpellAbility) runParams.get(AbilityKey.SpellAbility);
+            String castName = castSA != null ? castSA.getHostCard().getName() : "unknown";
+            System.out.println("[TriggerDebug] runTrigger: mode=" + mode + " spell=" + castName + " holdTrigger=" + holdTrigger + " stackFrozen=" + game.getStack().isFrozen() + " activeTriggers=" + activeTriggers.size() + " waitingTriggers=" + waitingTriggers.size());
+            for (Trigger at : activeTriggers) {
+                if (at.getMode() == mode) {
+                    System.out.println("[TriggerDebug]   activeSpellCastTrigger: host=" + at.getHostCard().getName() + " id=" + at.getId() + " zone=" + (game.getZoneOf(at.getHostCard()) != null ? game.getZoneOf(at.getHostCard()).getZoneType() : "null"));
+                }
+            }
+        }
         if (isTriggerSuppressed(mode)) {
             return;
         }
@@ -354,11 +371,14 @@ public class TriggerHandler {
     }
 
     private boolean isTriggerActive(final Trigger regtrig) {
+        boolean isSpellCastDebug = (regtrig.getMode() == TriggerType.SpellCast || regtrig.getMode() == TriggerType.SpellCastOrCopy);
         if (!regtrig.phasesCheck(game)) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] isTriggerActive FAIL: phasesCheck host=" + regtrig.getHostCard().getName());
             return false; // It's not the right phase to go off.
         }
 
         if (regtrig.isSuppressed()) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] isTriggerActive FAIL: suppressed host=" + regtrig.getHostCard().getName());
             return false; // Trigger removed by effect
         }
 
@@ -369,12 +389,14 @@ public class TriggerHandler {
 
         // do not check delayed
         if (regtrig.getSpawningAbility() == null && !regtrig.zonesCheck(game.getZoneOf(regtrig.getHostCard()))) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] isTriggerActive FAIL: zonesCheck host=" + regtrig.getHostCard().getName() + " zone=" + (game.getZoneOf(regtrig.getHostCard()) != null ? game.getZoneOf(regtrig.getHostCard()).getZoneType() : "null") + " triggerZones=" + regtrig.getParam("TriggerZones"));
             return false; // Host card isn't where it needs to be.
         }
 
         for (Trigger t : this.activeTriggers) {
             // If an ID that matches this ID is already active, don't add it
             if (regtrig.getId() == t.getId()) {
+                if (isSpellCastDebug) System.out.println("[TriggerDebug] isTriggerActive FAIL: already active host=" + regtrig.getHostCard().getName() + " id=" + regtrig.getId());
                 return false;
             }
         }
@@ -387,24 +409,31 @@ public class TriggerHandler {
             return false; // Not the right mode.
         }
 
+        boolean isSpellCastDebug = (mode == TriggerType.SpellCast || mode == TriggerType.SpellCastOrCopy);
+
         if (regtrig.isSuppressed()) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] canRunTrigger FAIL: suppressed host=" + regtrig.getHostCard().getName());
             return false; // Trigger removed by effect
         }
 
         /* this trigger can only be activated once per turn, verify it hasn't already run */
         if (!regtrig.checkActivationLimit()) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] canRunTrigger FAIL: activationLimit host=" + regtrig.getHostCard().getName());
             return false;
         }
 
         if (!regtrig.requirementsCheck(game)) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] canRunTrigger FAIL: requirementsCheck host=" + regtrig.getHostCard().getName());
             return false; // Conditions aren't right.
         }
 
         if (!regtrig.meetsRequirementsOnTriggeredObjects(game, runParams)) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] canRunTrigger FAIL: meetsRequirementsOnTriggeredObjects host=" + regtrig.getHostCard().getName());
             return false; // Conditions aren't right.
         }
 
         if (!regtrig.performTest(runParams)) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] canRunTrigger FAIL: performTest host=" + regtrig.getHostCard().getName());
             return false; // Test failed.
         }
 
@@ -415,9 +444,11 @@ public class TriggerHandler {
 
         // check if any static abilities are disabling the trigger (Torpor Orb and the like)
         if (!regtrig.isStatic() && StaticAbilityDisableTriggers.disabled(game, regtrig, runParams)) {
+            if (isSpellCastDebug) System.out.println("[TriggerDebug] canRunTrigger FAIL: staticAbilityDisabled host=" + regtrig.getHostCard().getName());
             return false;
         }
 
+        if (isSpellCastDebug) System.out.println("[TriggerDebug] canRunTrigger PASS: host=" + regtrig.getHostCard().getName() + " trigId=" + regtrig.getId());
         return true;
     }
 
