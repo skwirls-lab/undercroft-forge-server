@@ -10,6 +10,7 @@ import forge.ai.AiCostDecision;
 import forge.ai.ComputerUtil;
 import forge.ai.ComputerUtilMana;
 import forge.card.ColorSet;
+import forge.card.MagicColor;
 import forge.card.ICardFace;
 import forge.card.mana.ManaCost;
 import forge.card.mana.ManaCostShard;
@@ -31,6 +32,9 @@ import forge.game.mana.ManaCostBeingPaid;
 import forge.card.mana.ManaAtom;
 import forge.game.player.*;
 import forge.game.replacement.ReplacementEffect;
+import forge.game.ability.AbilityUtils;
+import forge.game.ability.ApiType;
+import forge.game.ability.effects.CharmEffect;
 import forge.game.spellability.*;
 import forge.game.staticability.StaticAbility;
 import forge.game.trigger.WrappedAbility;
@@ -131,12 +135,23 @@ public class BridgePlayerController extends PlayerController {
         try {
             // Block until client responds or timeout
             JsonObject response = future.get(CHOICE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            // An empty response is not a player decision - it means the prompt timed out, was
+            // cancelled, or the client has no UI for this choiceType and replied with keys we
+            // do not read. Every caller silently substitutes a default here, so without this
+            // log a whole mechanic can no-op with no trace at all.
+            if (response.size() == 0) {
+                log.error("EMPTY choice response for '{}' (request {}) - the caller will now "
+                        + "apply a hardcoded default. Either the client has no renderer for "
+                        + "this choiceType, or it replied with an unexpected key.",
+                        choiceType, requestId);
+            }
             return response;
         } catch (TimeoutException e) {
-            log.warn("Choice timeout for request {}", requestId);
+            log.error("Choice TIMEOUT after {}s for '{}' (request {}) - applying default",
+                    CHOICE_TIMEOUT_SECONDS, choiceType, requestId);
             return new JsonObject(); // Return empty = default/skip
         } catch (Exception e) {
-            log.error("Error waiting for choice {}: {}", requestId, e.getMessage());
+            log.error("Error waiting for choice '{}' ({}): {}", choiceType, requestId, e.getMessage());
             return new JsonObject();
         } finally {
             pendingChoices.remove(requestId);
@@ -148,13 +163,17 @@ public class BridgePlayerController extends PlayerController {
      */
     public void receiveChoiceResponse(JsonObject payload) {
         String requestId = payload.has("requestId") ? payload.get("requestId").getAsString() : null;
-        if (requestId != null) {
-            CompletableFuture<JsonObject> future = pendingChoices.get(requestId);
-            if (future != null) {
-                future.complete(payload);
-            } else {
-                log.warn("No pending choice for requestId: {}", requestId);
-            }
+        if (requestId == null) {
+            // Silently dropping this leaves the engine thread blocked for the full timeout.
+            log.error("choice_response with no requestId - dropping. Payload: {}", payload);
+            return;
+        }
+        CompletableFuture<JsonObject> future = pendingChoices.get(requestId);
+        if (future != null) {
+            future.complete(payload);
+        } else {
+            log.warn("No pending choice for requestId {} (already answered, timed out, or "
+                    + "cancelled). Any currently blocked prompt is still waiting.", requestId);
         }
     }
 
@@ -231,26 +250,101 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public void playSpellAbilityNoStack(SpellAbility effectSA, boolean mayChoseNewTargets) {
-        // This is called for things like mana abilities that don't use the stack
-        // Just let it resolve automatically
+        // Final resolution step for EVERY triggered ability (WrappedAbility.resolve), every
+        // replacement effect (ReplacementHandler) and every opening-hand effect (GameAction).
+        // An empty body here silently discards every trigger this player controls: the trigger
+        // registers, fires, goes on the stack, "resolves", and produces no effect.
+        //
+        // Mirrors PlayerControllerAi.playSpellAbilityNoStack. ComputerUtil.playNoStack pays any
+        // cost and then calls AbilityUtils.resolve(sa), which is what actually applies the effect.
+        if (effectSA == null) {
+            return;
+        }
+
+        // Callers that pass true have not chosen targets yet (WrappedAbility passes false,
+        // because trigger targets are fixed when the trigger goes on the stack).
+        if (mayChoseNewTargets && effectSA.usesTargeting()) {
+            chooseTargetsFor(effectSA);
+        }
+
+        if (!ComputerUtil.playNoStack(player, effectSA, getGame(), true)) {
+            log.warn("playSpellAbilityNoStack: {} did not resolve (cost could not be paid)", effectSA);
+        }
     }
 
     @Override
     public boolean playTrigger(Card host, WrappedAbility wrapperAbility, boolean isMandatory) {
-        if (isMandatory) return true;
+        if (wrapperAbility == null) {
+            return false;
+        }
 
-        JsonObject data = new JsonObject();
-        data.addProperty("cardName", host.getName());
-        data.addProperty("ability", wrapperAbility.toString());
-        data.addProperty("mandatory", false);
+        if (!isMandatory) {
+            JsonObject data = new JsonObject();
+            data.addProperty("cardName", host.getName());
+            data.addProperty("ability", wrapperAbility.toString());
+            data.addProperty("mandatory", false);
+            // The client renders data.prompt; without it the player sees a bare "Play trigger?"
+            // with no indication of which trigger is being offered.
+            data.addProperty("prompt", "Play the triggered ability of " + host.getName() + "?");
 
-        JsonObject response = requestChoice("play_trigger", data);
-        return response.has("play") ? response.get("play").getAsBoolean() : true;
+            JsonObject response = requestChoice("play_trigger", data);
+            boolean play = response.has("play") ? response.get("play").getAsBoolean() : true;
+            if (!play) {
+                return false;
+            }
+        }
+
+        // Answering the prompt is not the same as resolving the ability. TriggerHandler treats
+        // a true return as "the trigger fired", so returning the answer without resolving makes
+        // every static trigger a no-op that reports success.
+        // Mirrors PlayerControllerAi.playTrigger (prepareSingleSa + playNoStack).
+        if (!prepareTriggerAbility(host, wrapperAbility)) {
+            return false;
+        }
+        return ComputerUtil.playNoStack(wrapperAbility.getActivatingPlayer(), wrapperAbility, getGame(), true);
+    }
+
+    /**
+     * Resolve the choices an ability needs before it can be played outside the stack:
+     * modal (Charm) mode selection, and delegated targeting via TargetingPlayer.
+     * Mirrors PlayerControllerAi.prepareSingleSa.
+     */
+    private boolean prepareTriggerAbility(Card host, SpellAbility sa) {
+        if (sa.getApi() == ApiType.Charm) {
+            if (!CharmEffect.makeChoices(sa)) {
+                return false;
+            }
+            if (!sa.hasParam("Random")) {
+                return true;
+            }
+            sa = sa.getSubAbility();
+            if (sa == null) {
+                return false;
+            }
+        }
+        if (sa.hasParam("TargetingPlayer")) {
+            List<Player> targeting = AbilityUtils.getDefinedPlayers(host, sa.getParam("TargetingPlayer"), sa);
+            if (targeting.isEmpty()) {
+                return false;
+            }
+            Player targetingPlayer = targeting.get(0);
+            sa.setTargetingPlayer(targetingPlayer);
+            return targetingPlayer.getController().chooseTargetsFor(sa);
+        }
+        return true;
     }
 
     @Override
     public boolean playSaFromPlayEffect(SpellAbility tgtSA) {
-        return true; // Auto-play effects from other effects
+        // Used by cascade/discover, "you may cast it without paying its mana cost", and
+        // impulse-style play-from-exile. PlayEffect/ChangeZoneEffect/DiscoverEffect treat a
+        // true return as "the spell was cast", so returning true without playing anything
+        // makes all of those silently do nothing.
+        // Mirrors PlayerControllerAi.playSaFromPlayEffect.
+        if (tgtSA == null) {
+            return false;
+        }
+        return ComputerUtil.playStack(tgtSA, player, getGame());
     }
 
     @Override
@@ -1018,29 +1112,46 @@ public class BridgePlayerController extends PlayerController {
         // during mana payment (see payManaCost method). This matches how Forge works:
         // you can't just tap lands for mana randomly, only when paying for something.
 
+        // Zones a player can legally play from. Scanning only Hand/Battlefield/Command made
+        // whole mechanics unreachable:
+        //   Graveyard - flashback, escape, disturb, embalm, eternalize, unearth, aftermath
+        //   Exile     - Adventure halves, foretell, suspend, cascade/impulse "play until EOT"
+        //   Library   - Future Sight / Oracle of Mul Daya / Bolas's Citadel "play from the top"
+        // canPlay() is still the authority on whether any individual ability is legal right
+        // now, so widening the scan cannot make an illegal play available.
+        final ZoneType[] playableZones = {
+            ZoneType.Hand,
+            ZoneType.Battlefield,
+            ZoneType.Command,
+            ZoneType.Graveyard,
+            ZoneType.Exile,
+            ZoneType.Library,
+        };
+
         List<SpellAbility> legalPlays = new ArrayList<>();
-        for (Card c : player.getCardsIn(ZoneType.Hand)) {
-            for (SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
-                // Exclude mana abilities - they're handled during payment
-                if (!sa.isManaAbility() && sa.canPlay()) {
-                    legalPlays.add(sa);
-                }
-            }
-        }
-        for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
-            for (SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
-                // Exclude mana abilities - they're handled during payment
-                if (sa.isActivatedAbility() && !sa.isManaAbility() && sa.canPlay()) {
-                    legalPlays.add(sa);
-                }
-            }
-        }
-        // Command zone (commander)
-        for (Card c : player.getCardsIn(ZoneType.Command)) {
-            for (SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
-                // Exclude mana abilities - they're handled during payment
-                if (!sa.isManaAbility() && sa.canPlay()) {
-                    legalPlays.add(sa);
+        for (ZoneType zone : playableZones) {
+            // Every "play from your library" effect in practice exposes only the top card
+            // (Future Sight, Oracle of Mul Daya, Bolas's Citadel). Scanning the whole library
+            // would walk ~99 cards on every priority check for no additional legal plays.
+            Iterable<Card> candidates = zone == ZoneType.Library
+                ? player.getCardsIn(ZoneType.Library, 1)
+                : player.getCardsIn(zone);
+            for (Card c : candidates) {
+                for (SpellAbility sa : c.getAllPossibleAbilities(player, true)) {
+                    // Mana abilities are excluded here; they are offered during mana payment.
+                    if (sa.isManaAbility()) {
+                        continue;
+                    }
+                    // Permanents on the battlefield only offer activated abilities.
+                    if (zone == ZoneType.Battlefield && !sa.isActivatedAbility()) {
+                        continue;
+                    }
+                    // canPlay() consults the activating player; set it first so that
+                    // alternative-cost and zone-restricted abilities evaluate correctly.
+                    sa.setActivatingPlayer(player);
+                    if (sa.canPlay()) {
+                        legalPlays.add(sa);
+                    }
                 }
             }
         }
@@ -1347,12 +1458,68 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public byte chooseColor(String message, SpellAbility sa, ColorSet colors) {
-        return colors.getColor();
+        return promptForColor(message, colors, false);
     }
 
     @Override
     public byte chooseColorAllowColorless(String message, Card c, ColorSet colors) {
-        return colors.getColor();
+        return promptForColor(message, colors, true);
+    }
+
+    /**
+     * Ask the player to pick a single color from {@code colors}.
+     *
+     * ColorSet.getColor() returns the whole bitmask (31 for WUBRG), NOT a single color, and
+     * MagicColor.Color.fromByte maps anything that is not exactly one of W/U/B/R/G to
+     * COLORLESS. Returning it unconditionally meant every "add one mana of any color" source
+     * — Command Tower, Arcane Signet, Birds of Paradise — produced colorless mana.
+     * Mirrors PlayerControllerHuman.chooseColor, which only short-circuits for a single color.
+     */
+    private byte promptForColor(String message, ColorSet colors, boolean allowColorless) {
+        List<MagicColor.Color> options = new ArrayList<>();
+        if (colors != null) {
+            for (MagicColor.Color color : colors) {
+                if (color != MagicColor.Color.COLORLESS && !options.contains(color)) {
+                    options.add(color);
+                }
+            }
+        }
+        if (allowColorless) {
+            options.add(MagicColor.Color.COLORLESS);
+        }
+
+        if (options.isEmpty()) {
+            return MagicColor.COLORLESS;
+        }
+        if (options.size() == 1) {
+            return options.get(0).getColorMask();
+        }
+
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", message != null && !message.isEmpty() ? message : "Choose a color");
+        JsonArray arr = new JsonArray();
+        for (MagicColor.Color color : options) {
+            JsonObject o = new JsonObject();
+            o.addProperty("mask", color.getColorMask());
+            o.addProperty("name", color.getName());
+            o.addProperty("symbol", color.getShortName());
+            arr.add(o);
+        }
+        data.add("colors", arr);
+
+        JsonObject response = requestChoice("choose_color", data);
+        if (response.has("mask")) {
+            byte chosen = (byte) response.get("mask").getAsInt();
+            for (MagicColor.Color color : options) {
+                if (color.getColorMask() == chosen) {
+                    return chosen;
+                }
+            }
+        }
+
+        // Fall back to a single real color, never the combined mask.
+        log.warn("promptForColor: no usable answer for '{}', defaulting to {}", message, options.get(0).getName());
+        return options.get(0).getColorMask();
     }
 
     @Override
