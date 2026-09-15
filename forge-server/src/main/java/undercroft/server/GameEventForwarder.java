@@ -1,5 +1,6 @@
 package undercroft.server;
 
+import com.google.common.eventbus.Subscribe;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import forge.game.event.*;
@@ -26,6 +27,27 @@ public class GameEventForwarder extends IGameEventVisitor.Base<Void> {
     private void sendEvent(String eventType, JsonObject data) {
         data.addProperty("eventType", eventType);
         ForgeServer.sendMessage(wsContext, "game_event", data);
+    }
+
+    /**
+     * Entry point for Forge's event bus.
+     *
+     * game.subscribeToEvents(...) is a Guava EventBus.register(), and Guava dispatches ONLY to
+     * methods annotated with @Subscribe. Without this method, registering this class is a silent
+     * no-op and not one of the visit(...) handlers below is ever called — no game_event message
+     * ever reaches the client. Mirrors GameLogFormatter.recieve.
+     */
+    @Subscribe
+    public void receive(GameEvent event) {
+        if (event == null) {
+            return;
+        }
+        try {
+            event.visit(this);
+        } catch (Exception e) {
+            // A forwarding failure must never propagate back into the engine's event dispatch.
+            log.error("Failed to forward game event {}: {}", event.getClass().getSimpleName(), e.getMessage(), e);
+        }
     }
 
     @Override

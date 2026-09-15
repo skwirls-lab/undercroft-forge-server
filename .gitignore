@@ -23,3 +23,6 @@ Thumbs.db
 
 # Flatten plugin
 .flattened-pom.xml
+
+# maven-shade-plugin build artifact
+dependency-reduced-pom.xml

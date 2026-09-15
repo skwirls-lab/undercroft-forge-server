@@ -213,8 +213,12 @@ public class GameStateSerializer {
                 attachedTo.addProperty("controllerId", c.getEquipping().getController().getId());
                 card.add("attachedTo", attachedTo);
             }
-            if (c.isAura() && c.getEnchanting() instanceof Card) {
-                Card enchanted = (Card) c.getEnchanting();
+            // Card has no getEnchanting(); the accessor is getAttachedTo(), which already
+            // narrows entityAttachedTo to a Card and returns null for auras attached to a
+            // player. (Player-attached auras are not reported here — the client's attachedTo
+            // shape is card-specific.)
+            if (c.isAura() && c.getAttachedTo() != null) {
+                Card enchanted = c.getAttachedTo();
                 JsonObject attachedTo = new JsonObject();
                 attachedTo.addProperty("id", enchanted.getId());
                 attachedTo.addProperty("name", enchanted.getName());

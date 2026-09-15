@@ -171,10 +171,17 @@ public class ForgeServer {
     // --- Utility ---
 
     static void sendMessage(WsContext ctx, String type, Object payload) {
-        JsonObject msg = new JsonObject();
-        msg.addProperty("type", type);
-        msg.add("payload", gson.toJsonTree(payload));
-        ctx.send(msg.toString());
+        // Called from the engine thread (BridgePlayerController.requestChoice). If the socket
+        // has closed, ctx.send throws; letting that propagate kills the game thread mid-turn
+        // and leaks the pending-choice entry. Log and let the caller's timeout handle it.
+        try {
+            JsonObject msg = new JsonObject();
+            msg.addProperty("type", type);
+            msg.add("payload", gson.toJsonTree(payload));
+            ctx.send(msg.toString());
+        } catch (Exception e) {
+            log.warn("Failed to send '{}' message: {}", type, e.getMessage());
+        }
     }
 
     static void sendError(WsContext ctx, String message) {
