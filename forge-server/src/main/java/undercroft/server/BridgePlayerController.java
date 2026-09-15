@@ -9,6 +9,7 @@ import forge.LobbyPlayer;
 import forge.ai.AiCostDecision;
 import forge.ai.ComputerUtil;
 import forge.ai.ComputerUtilMana;
+import forge.StaticData;
 import forge.card.CardType;
 import forge.card.ColorSet;
 import forge.card.MagicColor;
@@ -708,17 +709,32 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean confirmTrigger(WrappedAbility sa) {
-        return true; // Auto-accept triggers for now
+        // Only optional ("you may") triggers are worth asking about; mandatory ones always fire.
+        if (sa == null || !sa.isOptionalTrigger()) {
+            return true;
+        }
+        Card host = sa.getHostCard();
+        return promptForConfirm("Use the triggered ability of "
+                + (host != null ? host.getName() : "this permanent") + "?", true);
     }
 
     @Override
     public List<Card> exertAttackers(List<Card> attackers) {
-        return Collections.emptyList();
+        if (attackers == null || attackers.isEmpty()) {
+            return Collections.emptyList();
+        }
+        CardCollection options = new CardCollection(attackers);
+        return new ArrayList<>(promptForCards("Choose attackers to exert (they won't untap next turn)",
+                options, 0, options.size()));
     }
 
     @Override
     public List<Card> enlistAttackers(List<Card> attackers) {
-        return Collections.emptyList();
+        if (attackers == null || attackers.isEmpty()) {
+            return Collections.emptyList();
+        }
+        CardCollection options = new CardCollection(attackers);
+        return new ArrayList<>(promptForCards("Choose attackers to enlist", options, 0, options.size()));
     }
 
     @Override
@@ -826,7 +842,9 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public CardCollection orderBlockers(Card attacker, CardCollection blockers) {
-        return blockers; // Default order
+        // Damage assignment order is the player's choice, not source order.
+        return promptForOrder("Damage assignment order for " + attacker.getName()
+                + " (first blocker takes damage first)", blockers);
     }
 
     @Override
@@ -838,7 +856,8 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public CardCollection orderAttackers(Card blocker, CardCollection attackers) {
-        return attackers; // Default order
+        return promptForOrder("Damage assignment order for " + blocker.getName()
+                + " (first attacker is dealt damage first)", attackers);
     }
 
     @Override
@@ -934,7 +953,11 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public CardCollectionView orderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
-        return cards; // Default order
+        if (cards == null || cards.size() <= 1) {
+            return cards;
+        }
+        return promptForOrder("Choose the order cards are put into your "
+                + destinationZone.name().toLowerCase(), cards);
     }
 
     @Override
@@ -971,28 +994,74 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public CardCollectionView chooseCardsToDelve(int genericAmount, CardCollection grave) {
-        return CardCollection.EMPTY; // Don't delve by default
+        // Returning empty meant delve could never be used.
+        if (genericAmount <= 0 || grave == null || grave.isEmpty()) {
+            return CardCollection.EMPTY;
+        }
+        return promptForCards("Exile cards from your graveyard to pay for Delve (up to "
+                + genericAmount + ")", grave, 0, Math.min(genericAmount, grave.size()));
     }
 
     @Override
     public Map<Card, ManaCostShard> chooseCardsForConvokeOrImprovise(SpellAbility sa, ManaCost manaCost,
             CardCollectionView untappedCards, boolean artifacts, boolean creatures, Integer maxReduction) {
-        return new HashMap<>(); // Don't convoke/improvise by default
+        // Returning an empty map meant convoke and improvise could never be used.
+        Map<Card, ManaCostShard> result = new HashMap<>();
+        if (untappedCards == null || untappedCards.isEmpty() || manaCost == null) {
+            return result;
+        }
+        int limit = maxReduction != null ? Math.min(maxReduction, untappedCards.size()) : untappedCards.size();
+        if (limit <= 0) {
+            return result;
+        }
+
+        CardCollectionView chosen = promptForCards("Tap creatures/artifacts to help pay "
+                + manaCost + " (" + (creatures ? "Convoke" : "Improvise") + ")",
+                untappedCards, 0, limit);
+
+        // Each tapped permanent pays one generic shard. Colored convoke reductions would need
+        // a per-card color prompt; generic is always legal and never over-pays.
+        for (Card c : chosen) {
+            result.put(c, ManaCostShard.GENERIC);
+        }
+        return result;
     }
 
     @Override
     public List<Card> chooseCardsForSplice(SpellAbility sa, List<Card> cards) {
-        return Collections.emptyList();
+        if (cards == null || cards.isEmpty()) {
+            return Collections.emptyList();
+        }
+        CardCollection options = new CardCollection(cards);
+        return new ArrayList<>(promptForCards("Choose cards to splice onto "
+                + (sa.getHostCard() != null ? sa.getHostCard().getName() : "this spell"),
+                options, 0, options.size()));
     }
 
     @Override
     public CardCollectionView chooseCardsToRevealFromHand(int min, int max, CardCollectionView valid) {
-        return parseCardSelection(new JsonObject(), valid, min);
+        // This previously passed a deliberately empty response so the helper auto-picked the
+        // first `min` cards from the player's hand without ever asking.
+        return promptForCards("Choose cards to reveal from your hand", valid, min,
+                Math.min(max, valid == null ? 0 : valid.size()));
     }
 
     @Override
     public List<SpellAbility> chooseSaToActivateFromOpeningHand(List<SpellAbility> usableFromOpeningHand) {
-        return Collections.emptyList();
+        // Returning empty meant Leyline, Chancellor and Gemstone Caverns style abilities were
+        // never offered before the first turn.
+        if (usableFromOpeningHand == null || usableFromOpeningHand.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<SpellAbility> chosen = new ArrayList<>();
+        for (SpellAbility sa : usableFromOpeningHand) {
+            Card host = sa.getHostCard();
+            if (promptForConfirm("Use " + (host != null ? host.getName() : "this ability")
+                    + " from your opening hand?", false)) {
+                chosen.add(sa);
+            }
+        }
+        return chosen;
     }
 
     @Override
@@ -1071,6 +1140,19 @@ public class BridgePlayerController extends PlayerController {
     @Override
     public Object vote(SpellAbility sa, String prompt, List<Object> options, ListMultimap<Object, Player> votes,
             Player forPlayer, boolean optional) {
+        if (options == null || options.isEmpty()) {
+            return null;
+        }
+        List<String> labels = new ArrayList<>();
+        for (Object o : options) {
+            labels.add(String.valueOf(o));
+        }
+        String chosen = promptForString(prompt, labels, labels.get(0));
+        for (Object o : options) {
+            if (String.valueOf(o).equals(chosen)) {
+                return o;
+            }
+        }
         return options.get(0);
     }
 
@@ -1111,7 +1193,7 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean confirmMulliganScry(Player p) {
-        return true; // Always scry after mulligan
+        return promptForConfirm("Scry after mulligan?", true);
     }
 
     @Override
@@ -1368,6 +1450,14 @@ public class BridgePlayerController extends PlayerController {
 
         sa = AbilityUtils.addSpliceEffects(sa);
 
+        // Offer alternative and optional additional costs (kicker, buyback, entwine, ...).
+        // chooseOptionalCosts has exactly one caller in Forge's human path
+        // (HumanPlay.chooseOptionalAdditionalCosts), which the bridge never invoked, so these
+        // costs were unreachable no matter what the player wanted.
+        if (sa.isSpell() && !source.isCopiedSpell()) {
+            sa = chooseOptionalAdditionalCosts(sa);
+        }
+
         // Move spell to stack (will be rolled back if payment fails)
         if (sa.isSpell() && !source.isCopiedSpell()) {
             sa.setHostCard(game.getAction().moveToStack(source, sa));
@@ -1429,6 +1519,133 @@ public class BridgePlayerController extends PlayerController {
         GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, payment, source);
         game.getStack().unfreezeStack();
         return false;
+    }
+
+    /**
+     * Offer alternative additional costs and optional additional costs for a spell.
+     * Mirrors HumanPlay.chooseOptionalAdditionalCosts.
+     */
+    private SpellAbility chooseOptionalAdditionalCosts(SpellAbility original) {
+        final List<SpellAbility> abilities = GameActionUtil.getAdditionalCostSpell(original);
+        SpellAbility chosen = getAbilityToPlay(original.getHostCard(), abilities);
+        if (chosen == null) {
+            chosen = original;
+        }
+
+        List<OptionalCostValue> list = GameActionUtil.getOptionalCostValues(chosen);
+        if (!list.isEmpty()) {
+            list = chooseOptionalCosts(chosen, list);
+        }
+        return GameActionUtil.addOptionalCosts(chosen, list);
+    }
+
+    /**
+     * Ask the player to put {@code cards} into an order, reusing the choose_order renderer.
+     * Returns the original order if the answer is unusable.
+     */
+    private CardCollection promptForOrder(String prompt, CardCollectionView cards) {
+        CardCollection original = new CardCollection(cards);
+        if (original.size() <= 1) {
+            return original;
+        }
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", prompt);
+        data.add("cards", serializeCards(original));
+
+        JsonObject response = requestChoice("choose_order", data);
+        if (!response.has("orderedIds")) {
+            return original;
+        }
+
+        JsonArray ids = response.getAsJsonArray("orderedIds");
+        CardCollection ordered = new CardCollection();
+        for (int i = 0; i < ids.size(); i++) {
+            int id = ids.get(i).getAsInt();
+            for (Card c : original) {
+                if (c.getId() == id && !ordered.contains(c)) {
+                    ordered.add(c);
+                    break;
+                }
+            }
+        }
+        // Anything the client omitted keeps its original relative position at the end.
+        for (Card c : original) {
+            if (!ordered.contains(c)) {
+                ordered.add(c);
+            }
+        }
+        return ordered;
+    }
+
+    /**
+     * Ask the player to pick up to {@code max} cards from {@code options} (selection may be
+     * empty), reusing the generic choose_cards renderer.
+     */
+    private CardCollectionView promptForCards(String prompt, CardCollectionView options, int min, int max) {
+        if (options == null || options.isEmpty() || max <= 0) {
+            return CardCollection.EMPTY;
+        }
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", prompt);
+        data.addProperty("min", min);
+        data.addProperty("max", max);
+        data.addProperty("optional", min == 0);
+        data.add("options", serializeCards(options));
+
+        JsonObject response = requestChoice("choose_cards", data);
+        return parseCardSelection(response, options, min);
+    }
+
+    /**
+     * Ask the player to pick one string from a list, reusing the generic choose_type renderer.
+     * Returns {@code fallback} if the answer is unusable.
+     */
+    private String promptForString(String prompt, Collection<String> options, String fallback) {
+        if (options == null || options.isEmpty()) {
+            return fallback;
+        }
+        if (options.size() == 1) {
+            return options.iterator().next();
+        }
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", prompt != null && !prompt.isEmpty() ? prompt : "Choose one");
+        JsonArray arr = new JsonArray();
+        options.forEach(arr::add);
+        data.add("options", arr);
+
+        JsonObject response = requestChoice("choose_type", data);
+        if (response.has("chosen")) {
+            String chosen = response.get("chosen").getAsString();
+            if (options.contains(chosen)) {
+                return chosen;
+            }
+        }
+        return fallback;
+    }
+
+    /** Ask the player for a number in [min, max], reusing the announce_number renderer. */
+    private int promptForNumber(String prompt, int min, int max) {
+        if (min >= max) {
+            return min;
+        }
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", prompt != null && !prompt.isEmpty() ? prompt : "Choose a number");
+        data.addProperty("min", min);
+        data.addProperty("max", max);
+
+        JsonObject response = requestChoice("announce_number", data);
+        if (response.has("value")) {
+            return Math.max(min, Math.min(max, response.get("value").getAsInt()));
+        }
+        return min;
+    }
+
+    /** Ask a yes/no question, reusing the confirm_action renderer. */
+    private boolean promptForConfirm(String prompt, boolean fallback) {
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", prompt != null && !prompt.isEmpty() ? prompt : "Confirm?");
+        JsonObject response = requestChoice("confirm_action", data);
+        return response.has("confirmed") ? response.get("confirmed").getAsBoolean() : fallback;
     }
 
     /**
@@ -1541,12 +1758,13 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public int chooseNumberForCostReduction(SpellAbility sa, int min, int max) {
-        return min;
+        return promptForNumber("Choose a cost reduction amount", min, max);
     }
 
     @Override
     public int chooseNumberForKeywordCost(SpellAbility sa, Cost cost, KeywordInterface keyword, String prompt, int max) {
-        return 0;
+        // Returning 0 here meant multikicker and similar keyword costs were never paid.
+        return promptForNumber(prompt != null ? prompt : "How many times?", 0, max);
     }
 
     @Override
@@ -1586,7 +1804,7 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean chooseFlipResult(SpellAbility sa, Player flipper, boolean[] results, boolean call) {
-        return true; // Call heads
+        return promptForConfirm("Call heads? (No = tails)", true);
     }
 
     @Override
@@ -1677,32 +1895,69 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean chooseCardsPile(SpellAbility sa, CardCollectionView pile1, CardCollectionView pile2, String faceUp) {
-        return true; // Choose pile 1
+        return promptForConfirm("Choose the first pile? (" + pile1.size() + " cards vs "
+                + pile2.size() + " cards)", true);
     }
 
     @Override
     public CounterType chooseCounterType(List<CounterType> options, SpellAbility sa, String prompt, Map<String, Object> params) {
-        return options.isEmpty() ? null : options.get(0);
+        if (options == null || options.isEmpty()) {
+            return null;
+        }
+        List<String> names = new ArrayList<>();
+        for (CounterType ct : options) {
+            names.add(ct.getName());
+        }
+        String chosen = promptForString(prompt, names, names.get(0));
+        for (CounterType ct : options) {
+            if (ct.getName().equals(chosen)) {
+                return ct;
+            }
+        }
+        return options.get(0);
     }
 
     @Override
     public String chooseKeywordForPump(List<String> options, SpellAbility sa, String prompt, Card tgtCard) {
-        return options.isEmpty() ? "" : options.get(0);
+        return promptForString(prompt, options, options.isEmpty() ? "" : options.get(0));
     }
 
     @Override
     public int chooseNumber(SpellAbility sa, String title, int min, int max) {
-        return min;
+        return promptForNumber(title, min, max);
     }
 
     @Override
     public int chooseNumber(SpellAbility sa, String title, List<Integer> values, Player relatedPlayer) {
-        return values.isEmpty() ? 0 : values.get(0);
+        if (values == null || values.isEmpty()) {
+            return 0;
+        }
+        List<String> labels = new ArrayList<>();
+        for (Integer v : values) {
+            labels.add(String.valueOf(v));
+        }
+        String chosen = promptForString(title, labels, labels.get(0));
+        try {
+            return Integer.parseInt(chosen);
+        } catch (NumberFormatException e) {
+            return values.get(0);
+        }
     }
 
     @Override
     public List<OptionalCostValue> chooseOptionalCosts(SpellAbility chosen, List<OptionalCostValue> optionalCostValues) {
-        return Collections.emptyList();
+        // Returning empty meant kicker, buyback, entwine and every other optional additional
+        // cost was declined without ever being offered.
+        if (optionalCostValues == null || optionalCostValues.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<OptionalCostValue> taken = new ArrayList<>();
+        for (OptionalCostValue ocv : optionalCostValues) {
+            if (promptForConfirm("Pay optional cost: " + ocv + "?", false)) {
+                taken.add(ocv);
+            }
+        }
+        return taken;
     }
 
     @Override
@@ -1712,17 +1967,35 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public String chooseProtectionType(String string, SpellAbility sa, List<String> choices) {
-        return choices.isEmpty() ? "" : choices.get(0);
+        return promptForString(string, choices, choices.isEmpty() ? "" : choices.get(0));
     }
 
     @Override
     public boolean confirmPayment(CostPart costPart, String string, SpellAbility sa) {
-        return true;
+        return promptForConfirm(string != null ? string : "Pay " + costPart + "?", true);
     }
 
     @Override
     public ReplacementEffect chooseSingleReplacementEffect(List<ReplacementEffect> possibleReplacers) {
-        return possibleReplacers.isEmpty() ? null : possibleReplacers.get(0);
+        if (possibleReplacers == null || possibleReplacers.isEmpty()) {
+            return null;
+        }
+        if (possibleReplacers.size() == 1) {
+            return possibleReplacers.get(0);
+        }
+        // Which replacement applies first is the affected player's choice (CR 616.1).
+        List<String> labels = new ArrayList<>();
+        for (ReplacementEffect re : possibleReplacers) {
+            labels.add(String.valueOf(re));
+        }
+        String chosen = promptForString("Choose which replacement effect to apply first",
+                labels, labels.get(0));
+        for (int i = 0; i < possibleReplacers.size(); i++) {
+            if (labels.get(i).equals(chosen)) {
+                return possibleReplacers.get(i);
+            }
+        }
+        return possibleReplacers.get(0);
     }
 
     @Override
@@ -1732,7 +2005,11 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean payCostToPreventEffect(Cost cost, SpellAbility sa, boolean alreadyPaid, FCollectionView<Player> allPayers) {
-        return false;
+        // Declining unconditionally meant "unless you pay/sacrifice..." was never offered.
+        if (!promptForConfirm("Pay " + cost + " to prevent this effect?", false)) {
+            return false;
+        }
+        return new CostPayment(cost, sa).payCost(new AiCostDecision(player, sa, true));
     }
 
     @Override
@@ -1742,19 +2019,46 @@ public class BridgePlayerController extends PlayerController {
 
     @Override
     public boolean payCombatCost(Card card, Cost cost, SpellAbility sa, String prompt) {
-        return false;
+        // Declining unconditionally made attacks silently fail against Propaganda-style taxes.
+        if (!promptForConfirm(prompt != null ? prompt : "Pay " + cost + "?", false)) {
+            return false;
+        }
+        return new CostPayment(cost, sa).payCost(new AiCostDecision(player, sa, true));
     }
 
     // payManaCost is defined earlier in this file (near line 1046)
 
     @Override
     public String chooseCardName(SpellAbility sa, Predicate<ICardFace> cpp, String valid, String message) {
-        return "";
+        // Returning "" named no card at all, which silently broke Cabal Therapy, Meddling Mage,
+        // Pithing Needle and every other "choose a card name" effect.
+        List<String> names = new ArrayList<>();
+        try {
+            for (ICardFace face : StaticData.instance().getCommonCards().getAllFaces()) {
+                if (cpp == null || cpp.test(face)) {
+                    names.add(face.getName());
+                }
+            }
+        } catch (Exception e) {
+            log.error("chooseCardName: could not enumerate card faces: {}", e.getMessage());
+        }
+        if (names.isEmpty()) {
+            return "";
+        }
+        Collections.sort(names);
+        return promptForString(message != null ? message : "Choose a card name", names, names.get(0));
     }
 
     @Override
     public String chooseCardName(SpellAbility sa, List<ICardFace> faces, String message) {
-        return faces.isEmpty() ? "" : faces.get(0).getName();
+        if (faces == null || faces.isEmpty()) {
+            return "";
+        }
+        List<String> names = new ArrayList<>();
+        for (ICardFace f : faces) {
+            names.add(f.getName());
+        }
+        return promptForString(message, names, names.get(0));
     }
 
     @Override
