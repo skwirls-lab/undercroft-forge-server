@@ -9,6 +9,7 @@ import forge.LobbyPlayer;
 import forge.ai.AiCostDecision;
 import forge.ai.ComputerUtil;
 import forge.ai.ComputerUtilMana;
+import forge.card.CardType;
 import forge.card.ColorSet;
 import forge.card.MagicColor;
 import forge.card.ICardFace;
@@ -461,8 +462,18 @@ public class BridgePlayerController extends PlayerController {
     @Override
     public Integer announceRequirements(SpellAbility ability, String announce) {
         JsonObject data = new JsonObject();
-        data.addProperty("prompt", announce);
+        data.addProperty("prompt", "Choose " + announce + " for "
+                + (ability.getHostCard() != null ? ability.getHostCard().getName() : "this spell"));
+        data.addProperty("announce", announce);
         data.addProperty("abilityDescription", ability.toString());
+        data.addProperty("min", 0);
+        // Bound the stepper by what the player could actually pay, so the prompt is usable
+        // instead of an unbounded counter.
+        try {
+            data.addProperty("max", ComputerUtilMana.getAvailableManaEstimate(player));
+        } catch (Exception e) {
+            log.debug("Could not estimate available mana for {}: {}", announce, e.getMessage());
+        }
 
         JsonObject response = requestChoice("announce_number", data);
         return response.has("value") ? response.get("value").getAsInt() : 0;
@@ -1322,41 +1333,85 @@ public class BridgePlayerController extends PlayerController {
         // This mirrors HumanPlaySpellAbility.playAbility which handles rollback properly
         Card source = sa.getHostCard();
         Game game = player.getGame();
-        
+
         // Store zone info for rollback
         forge.game.zone.Zone fromZone = game.getZoneOf(source);
         int zonePosition = fromZone != null ? fromZone.getCards().indexOf(source) : 0;
-        
+
+        // CR 401.5: freeze the top library cards while casting so the player cannot see the
+        // next card. This matters now that the top of the library is a playable zone.
+        boolean refreeze = game.getStack().isFrozen();
+        if (!refreeze) {
+            game.setTopLibsCast();
+        }
+
+        // needX starts true and is only narrowed for modal spells, as in HumanPlaySpellAbility.
+        boolean needX = true;
+
+        // CR 601.4 / 603.3c: modal spells choose their mode(s) BEFORE costs are computed.
+        // CharmEffect.makeChoices is only ever called from the human/AI cast paths, so
+        // omitting it here meant modal spells never prompted and then resolved to nothing.
+        if (sa.getApi() == ApiType.Charm) {
+            if (sa.isAnnouncing("X")) {
+                needX = sa.costHasX();
+                if (!announceValuesLikeX(sa, needX)) {
+                    game.clearTopLibsCast(sa);
+                    return false;
+                }
+                needX = false;
+            }
+            if (!CharmEffect.makeChoices(sa)) {
+                game.clearTopLibsCast(sa);
+                return false;
+            }
+        }
+
+        sa = AbilityUtils.addSpliceEffects(sa);
+
         // Move spell to stack (will be rolled back if payment fails)
         if (sa.isSpell() && !source.isCopiedSpell()) {
             sa.setHostCard(game.getAction().moveToStack(source, sa));
             sa.changeText();
         }
-        
+
         if (!sa.isCopied()) {
             sa.resetPaidHash();
             sa.setPaidLife(0);
         }
-        
+
+        // Attaches optional additional costs (kicker, buyback, entwine, ...) to the ability.
+        // Without it those costs are never even offered.
+        if (sa.isSpell() && !source.isCopiedSpell()) {
+            sa = GameActionUtil.addExtraKeywordCost(sa);
+        }
+
         Cost abCost = sa.getPayCosts();
         CostPayment payment = new CostPayment(abCost, sa);
-        
+
         sa.clearManaPaid();
         sa.getPayingManaAbilities().clear();
-        
-        // Check prerequisites and pay costs
-        boolean prerequisitesMet = sa.checkRestrictions(player) &&
+
+        // announceType and announceValuesLikeX must run before the cost is paid: they set the
+        // chosen type/number and, critically, setXManaCostPaid. Omitting them meant every X
+        // spell was cast with X unset.
+        boolean prerequisitesMet = announceType(sa) &&
+            announceValuesLikeX(sa, needX) &&
+            sa.checkRestrictions(player) &&
             sa.setupTargets() &&
             sa.canCastTiming(player) &&
             sa.isLegalAfterStack();
-        
+
         game.getStack().freezeStack(sa);
-        
+
         if (prerequisitesMet) {
-            // Use AiCostDecision for cost payment - it will call back to our payManaCost
+            // NOTE: still AiCostDecision. Non-mana costs (sacrifice, discard, exile, tap,
+            // remove counters) are therefore chosen by AI heuristics rather than by the
+            // player. Fixing that needs a bridge ICostVisitor equivalent to HumanCostDecision.
             prerequisitesMet = payment.payCost(new AiCostDecision(player, sa, false));
         }
-        
+
+        game.clearTopLibsCast(sa);
+
         if (!prerequisitesMet) {
             // Rollback: move card back to original zone
             log.info("playChosenSpellAbility: rolling back {} to {}", source.getName(), fromZone);
@@ -1374,6 +1429,84 @@ public class BridgePlayerController extends PlayerController {
         GameActionUtil.rollbackAbility(sa, fromZone, zonePosition, payment, source);
         game.getStack().unfreezeStack();
         return false;
+    }
+
+    /**
+     * Announce X / multikicker style values before costs are paid.
+     * Mirrors HumanPlaySpellAbility.announceValuesLikeX. Without this, setXManaCostPaid is
+     * never called and every X spell is cast with X unset.
+     */
+    private boolean announceValuesLikeX(SpellAbility sa, boolean needX) {
+        if (sa.isCopied() || sa.isWrapper()) {
+            return true; // don't re-announce for spell copies
+        }
+
+        final Cost cost = sa.getPayCosts();
+        final Card card = sa.getHostCard();
+
+        final String announce = sa.getParam("Announce");
+        if (announce != null && needX) {
+            for (final String aVar : announce.split(",")) {
+                final String varName = aVar.trim();
+                final Integer value = announceRequirements(sa, varName);
+                if (value == null) {
+                    return false;
+                }
+                if ("X".equalsIgnoreCase(varName)) {
+                    needX = false;
+                    sa.setXManaCostPaid(value);
+                } else {
+                    sa.setSVar(varName, value.toString());
+                    card.setSVar(varName, value.toString());
+                }
+            }
+        }
+
+        if (needX) {
+            if (cost.hasXInAnyCostPart()) {
+                final String sVar = sa.hasParam("XAlternative") ? sa.getParam("XAlternative") : sa.getSVar("X");
+                if ("Count$xPaid".equals(sVar) || sVar == null || sVar.isEmpty()) {
+                    final Integer value = announceRequirements(sa, "X");
+                    if (value == null) {
+                        return false;
+                    }
+                    sa.setXManaCostPaid(value);
+                }
+            } else {
+                sa.setXManaCostPaid(null);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Resolve an AnnounceType parameter (creature type / number / opponent) on cast.
+     * Mirrors HumanPlaySpellAbility.announceType.
+     */
+    private boolean announceType(SpellAbility sa) {
+        if (sa.isCopied()) {
+            return true;
+        }
+        final String announce = sa.getParam("AnnounceType");
+        if (announce == null) {
+            return true;
+        }
+        for (final String aVar : announce.split(",")) {
+            final String varName = aVar.trim();
+            if ("CreatureType".equals(varName)) {
+                final String choice = chooseSomeType("Creature", sa, CardType.getAllCreatureTypes(), false);
+                sa.getHostCard().setChosenType(choice);
+            } else if ("ChooseNumber".equals(varName)) {
+                final int min = Integer.parseInt(sa.getParam("Min"));
+                final int max = Integer.parseInt(sa.getParam("Max"));
+                sa.getHostCard().setChosenNumber(chooseNumber(sa, "Choose a number", min, max));
+            } else if ("Opponent".equals(varName)) {
+                final Player opp = chooseSingleEntityForEffect(
+                        player.getOpponents(), sa, "Choose an opponent", null);
+                sa.getHostCard().setChosenPlayer(opp);
+            }
+        }
+        return true;
     }
 
     @Override
