@@ -1,0 +1,46 @@
+name: CI
+
+# The bridge did not compile for two months (2026-07-03 to 2026-09-15) and nobody noticed,
+# because nothing ever built it except a Railway deploy nobody was watching. This is that
+# missing alarm. The smoke test matters as much as the compile: a card-data change can leave
+# a server that builds, starts, reports ready, and has zero cards.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Build Forge engine
+        run: mvn -B -q install -DskipTests
+        working-directory: forge-engine
+
+      - name: Build bridge server
+        run: mvn -B -q package -DskipTests
+        working-directory: forge-server
+
+      # ForgeConstants derives every other data path from the PARENT of FORGE_RES plus "res/",
+      # so the directory has to be named exactly `res` — which is why the Dockerfile copies
+      # forge-res to /app/res. Same trick here, with a symlink.
+      - name: Stage card data as ./res
+        run: |
+          mkdir -p "$RUNNER_TEMP/forge"
+          ln -s "$GITHUB_WORKSPACE/forge-res" "$RUNNER_TEMP/forge/res"
+
+      - name: Smoke test — load the card database
+        run: java -Xmx2g -jar forge-server/target/forge-server-1.0.0-SNAPSHOT.jar --smoke-test
+        env:
+          FORGE_RES: ${{ runner.temp }}/forge/res
