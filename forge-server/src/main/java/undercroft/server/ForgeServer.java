@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Map;
+import java.util.Arrays;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -42,16 +43,30 @@ public class ForgeServer {
         return contextToSession.computeIfAbsent(ctx, k -> UUID.randomUUID().toString());
     }
 
+    /**
+     * Below this, something is wrong with the card data even though the load reported success.
+     * A healthy tree loads ~94,600 cards; a partial checkout or a wrong FORGE_RES path can
+     * still produce a small, non-zero count, which is worse than an outright failure because
+     * the server then starts and quietly cannot find half the cards in a decklist.
+     */
+    private static final int MIN_EXPECTED_CARDS = 30_000;
+
     public static void main(String[] args) {
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "7000"));
         String forgeRes = System.getenv().getOrDefault("FORGE_RES",
                 "../resource/forge-master/forge-gui/res");
+
+        boolean smokeTest = Arrays.asList(args).contains("--smoke-test");
 
         log.info("Starting Undercroft Forge Server on port {}", port);
         log.info("Forge resource path: {}", forgeRes);
 
         // Initialize Forge's static data (card definitions, etc.)
         ForgeInit.initialize(forgeRes);
+
+        if (smokeTest) {
+            System.exit(runSmokeTest());
+        }
 
         Javalin app = Javalin.create(config -> {
             config.enableCorsForAllOrigins();
@@ -186,5 +201,31 @@ public class ForgeServer {
 
     static void sendError(WsContext ctx, String message) {
         sendMessage(ctx, "error", Map.of("message", message));
+    }
+
+    /**
+     * Load-and-exit check for CI. Returns a process exit code: 0 healthy, 1 not.
+     *
+     * This exists because of two real failures. The bridge did not compile for two months and
+     * nobody noticed, and a card-data refresh from a newer upstream Forge aborts the entire
+     * card database with "No enum constant forge.card.CardSplitType.Prepare" when a script
+     * uses a mechanic this engine build does not know — leaving a server that starts, reports
+     * ready, and has zero cards. A compile is not enough of a gate; the card database has to
+     * be loaded and counted.
+     */
+    private static int runSmokeTest() {
+        try {
+            int cards = StaticData.instance().getCommonCards().getAllCards().size();
+            if (cards < MIN_EXPECTED_CARDS) {
+                log.error("SMOKE TEST FAILED: only {} cards loaded, expected at least {}",
+                        cards, MIN_EXPECTED_CARDS);
+                return 1;
+            }
+            log.info("SMOKE TEST PASSED: {} cards loaded", cards);
+            return 0;
+        } catch (Exception e) {
+            log.error("SMOKE TEST FAILED: {}", e.getMessage(), e);
+            return 1;
+        }
     }
 }

@@ -1,0 +1,165 @@
+name: Upgrade Forge
+
+# Keeps the vendored Forge engine and card data current with upstream, so new sets become
+# playable without anyone having to remember.
+#
+# WHY IT SYNCS THE ENGINE AND NOT JUST THE CARD SCRIPTS
+#
+# Card scripts are plain text, so refreshing only `forge-res` looks like the cheap option. It
+# is not: a newer script can name a mechanic this engine build has no enum for, and Forge
+# aborts the ENTIRE card database rather than skipping the card. Measured on 2026-09-16 —
+# upstream cardsfolder against the pinned 2.0.12 engine dies with
+#   IllegalArgumentException: No enum constant forge.card.CardSplitType.Prepare
+# and loads 0 of ~94,600 cards. The server still starts and reports ready. So engine and card
+# data move together, or not at all.
+#
+# This is safe to run unattended because it never touches main. It opens a pull request, and
+# the PR only exists if the engine compiled, the bridge compiled against the new Forge API,
+# and the card database actually loaded. Railway deploys when you merge, not when this runs.
+
+on:
+  schedule:
+    # Mondays, 07:00 UTC. Upstream tags every few weeks; weekly is plenty.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to pin (e.g. forge-2.0.14). Defaults to the newest.'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target upstream tag
+        id: target
+        run: |
+          set -euo pipefail
+          current="$(cat FORGE_VERSION)"
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            target="${{ github.event.inputs.tag }}"
+          else
+            # Highest forge-X.Y.Z tag. Peeled refs (^{}) are filtered out; sort -V orders
+            # 2.0.9 before 2.0.10, which a plain lexical sort gets wrong.
+            target="$(git ls-remote --tags --refs https://github.com/Card-Forge/forge \
+              | awk -F/ '{print $NF}' \
+              | grep -E '^forge-[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -1)"
+          fi
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "target=$target"   >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$target" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Already on $current — nothing to do."
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "Upgrade available: $current -> $target"
+          fi
+
+      - name: Fetch upstream at target tag
+        if: steps.target.outputs.up_to_date == 'false'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${{ steps.target.outputs.target }}" \
+            --filter=blob:none --sparse \
+            https://github.com/Card-Forge/forge "$RUNNER_TEMP/upstream"
+          cd "$RUNNER_TEMP/upstream"
+          git sparse-checkout set \
+            forge-core forge-game forge-ai forge-gui pom.xml \
+            forge-gui/res/cardsfolder forge-gui/res/editions forge-gui/res/tokenscripts
+
+      # The vendored engine carries no local patches (verified: zero net diff against the
+      # original import), so replacing it wholesale is safe. If that ever stops being true,
+      # this step is where the divergence would be silently discarded — check before trusting it.
+      - name: Replace vendored engine and card data
+        if: steps.target.outputs.up_to_date == 'false'
+        run: |
+          set -euo pipefail
+          up="$RUNNER_TEMP/upstream"
+
+          for m in forge-core forge-game forge-ai forge-gui; do
+            rm -rf "forge-engine/$m"
+            cp -a "$up/$m" "forge-engine/$m"
+          done
+
+          for d in cardsfolder editions tokenscripts; do
+            rm -rf "forge-res/$d"
+            cp -a "$up/forge-gui/res/$d" "forge-res/$d"
+          done
+
+          echo "${{ steps.target.outputs.target }}" > FORGE_VERSION
+
+      - uses: actions/setup-java@v4
+        if: steps.target.outputs.up_to_date == 'false'
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      # Gate 1: does the new engine build, and does OUR bridge still compile against its API?
+      # BridgePlayerController implements 108 abstract methods of Forge's PlayerController;
+      # an upstream signature change lands here as a compile error, which is exactly what we
+      # want a PR to be blocked on.
+      - name: Build engine and bridge
+        if: steps.target.outputs.up_to_date == 'false'
+        run: |
+          set -euo pipefail
+          (cd forge-engine && mvn -B -q install -DskipTests)
+          (cd forge-server && mvn -B -q package -DskipTests)
+
+      # Gate 2: does the card database actually load? This is the one that catches the
+      # CardSplitType class of failure, which compiles fine and fails at runtime.
+      - name: Smoke test — load the card database
+        if: steps.target.outputs.up_to_date == 'false'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/forge"
+          ln -s "$GITHUB_WORKSPACE/forge-res" "$RUNNER_TEMP/forge/res"
+          FORGE_RES="$RUNNER_TEMP/forge/res" \
+            java -Xmx2g -jar forge-server/target/forge-server-1.0.0-SNAPSHOT.jar --smoke-test
+
+      - name: Open pull request
+        if: steps.target.outputs.up_to_date == 'false'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/forge-${{ steps.target.outputs.target }}
+          base: main
+          title: 'Upgrade Forge to ${{ steps.target.outputs.target }}'
+          commit-message: |
+            Upgrade vendored Forge to ${{ steps.target.outputs.target }}
+
+            Engine modules and card data replaced together from upstream at
+            ${{ steps.target.outputs.target }}. Card scripts cannot be refreshed on their own:
+            a script naming a mechanic the engine has no enum for aborts the whole card
+            database, leaving a server that starts with zero cards.
+
+            Gated on: engine build, bridge build against the new Forge API, and a card
+            database load of at least 30,000 cards.
+          body: |
+            Automated upgrade of the vendored Forge engine and card data,
+            `${{ steps.target.outputs.current }}` → `${{ steps.target.outputs.target }}`.
+
+            **This PR only exists because all three gates passed:**
+            - the upstream engine built
+            - `BridgePlayerController` and the rest of the bridge still compile against Forge's API
+            - the card database loaded with at least 30,000 cards
+
+            Engine and card data are upgraded **together**, deliberately. Refreshing
+            `forge-res` alone is what breaks: a newer card script can name a mechanic the
+            pinned engine has no enum for, and Forge aborts the entire card database rather
+            than skipping that one card — a server that starts, reports ready, and has zero
+            cards.
+
+            The diff is very large because `forge-res/cardsfolder` holds one text file per
+            card. Reviewing it file by file is not the point; the gates are.
+
+            **Before merging**, be aware that merging triggers a Railway deploy. Worth a quick
+            game afterwards to confirm the bridge behaves — the gates prove the card data
+            loads, not that gameplay is unchanged.
