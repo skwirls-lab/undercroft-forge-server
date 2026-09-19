@@ -63,6 +63,14 @@ jobs:
             echo "Upgrade available: $current -> $target"
           fi
 
+      # Nothing is overwritten until we have proved there is nothing of ours to lose. The
+      # vendored engine is meant to be untouched upstream code — every Undercroft-specific
+      # line lives in forge-server/, which this job never touches. If someone has patched the
+      # engine in place, this stops the upgrade and names the files instead of deleting them.
+      - name: Refuse to upgrade over local engine changes
+        if: steps.target.outputs.up_to_date == 'false'
+        run: ./scripts/engine-baseline.sh verify
+
       - name: Fetch upstream at target tag
         if: steps.target.outputs.up_to_date == 'false'
         run: |
@@ -94,7 +102,27 @@ jobs:
             cp -a "$up/forge-gui/res/$d" "forge-res/$d"
           done
 
+          # forge-engine/pom.xml is deliberately NOT replaced. It is the one file in the
+          # engine we do modify: its <modules> list is cut down to the four modules a
+          # headless server needs, dropping forge-gui-desktop, forge-gui-mobile and the rest.
+          # Copying upstream's would drag those back in and break the build. Only the version
+          # number is carried across, so the pom stops claiming a release it is not.
+          upstream_version="$(sed -n 's:.*<versionCode>\(.*\)</versionCode>.*:\1:p' "$up/pom.xml" | head -1)"
+          if [ -z "$upstream_version" ]; then
+            echo "Could not read versionCode from upstream pom.xml" >&2
+            exit 1
+          fi
+          sed -i "s:<versionCode>[^<]*</versionCode>:<versionCode>${upstream_version}</versionCode>:" \
+            forge-engine/pom.xml
+
           echo "${{ steps.target.outputs.target }}" > FORGE_VERSION
+
+      # The engine is now legitimately different, so the baseline has to describe the new
+      # tree. The script hashes the working tree, so this is correct before anything is
+      # committed.
+      - name: Re-record the engine baseline
+        if: steps.target.outputs.up_to_date == 'false'
+        run: ./scripts/engine-baseline.sh write
 
       - uses: actions/setup-java@v4
         if: steps.target.outputs.up_to_date == 'false'
@@ -157,9 +185,16 @@ jobs:
             than skipping that one card — a server that starts, reports ready, and has zero
             cards.
 
+            **Nothing of ours was overwritten.** This job verifies
+            `forge-engine/ENGINE_BASELINE.txt` before touching a file and refuses to run if
+            the engine has been patched locally. `forge-engine/pom.xml` (the stripped module
+            list) and the whole of `forge-server/` are untouched by design — see
+            `FORGE_VERSION.md`.
+
+            Worth a real test game after merging. The gates prove the card database loads,
+            not that gameplay is unchanged.
+
             The diff is very large because `forge-res/cardsfolder` holds one text file per
             card. Reviewing it file by file is not the point; the gates are.
 
-            **Before merging**, be aware that merging triggers a Railway deploy. Worth a quick
-            game afterwards to confirm the bridge behaves — the gates prove the card data
-            loads, not that gameplay is unchanged.
+            **Merging triggers a Railway deploy.**

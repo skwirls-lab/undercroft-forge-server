@@ -18,6 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Catches an engine patch the moment it is proposed, rather than when the next
+      # upgrade silently deletes it.
+      - name: Verify the vendored engine is unmodified
+        run: ./scripts/engine-baseline.sh verify
+
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
