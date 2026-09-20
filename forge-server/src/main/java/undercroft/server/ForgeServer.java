@@ -20,7 +20,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * Protocol:
  *   Client → Server:
- *     { "type": "start_game", "payload": { "deckList": [...], "commander": "...", "format": "commander" } }
+ *     { "type": "start_game", "payload": { "deckList": [...], "commander": "...", "format": "commander",
+ *                                          "aiCount": 1..3, "aiDecks": [{ "deckList": [...], "commander": "...", "name": "..." }] } }
  *     { "type": "choice_response", "payload": { "requestId": "...", ... } }
  *     { "type": "concede" }
  *
