@@ -74,18 +74,34 @@ public class GameSession {
 
         // Parse AI decks from payload (if provided by the client)
         List<Deck> aiDeckList = new ArrayList<>();
+        List<String> aiDeckNames = new ArrayList<>();
         if (startPayload.has("aiDecks") && startPayload.get("aiDecks").isJsonArray()) {
             JsonArray aiDecksArray = startPayload.getAsJsonArray("aiDecks");
             for (int i = 0; i < aiDecksArray.size(); i++) {
                 JsonObject aiDeckPayload = aiDecksArray.get(i).getAsJsonObject();
                 aiDeckList.add(parseDeck(aiDeckPayload, true));
+                aiDeckNames.add(aiDeckPayload.has("name") && aiDeckPayload.get("name").isJsonPrimitive()
+                        ? aiDeckPayload.get("name").getAsString() : null);
             }
         }
 
-        // Create AI opponents — use dedicated AI decks if available, otherwise fallback to humanDeck
-        String[] aiNames = {"AI Opponent", "AI Opponent 2", "AI Opponent 3"};
+        // Create AI opponents — use dedicated AI decks if available, otherwise fallback to humanDeck.
+        // A seat is named after its deck when the client says so (the player chose what this
+        // opponent plays, and the log should say "Krenko Goblins cast..." not "AI Opponent 2
+        // cast..."). Names are de-duplicated: two players with one name cannot be told apart.
+        String[] defaultNames = {"AI Opponent", "AI Opponent 2", "AI Opponent 3"};
+        java.util.Set<String> usedNames = new java.util.HashSet<>();
+        usedNames.add(playerName);
         for (int i = 0; i < aiCount; i++) {
-            LobbyPlayerAi aiLobby = new LobbyPlayerAi(aiNames[i], null);
+            String aiName = defaultNames[i];
+            if (i < aiDeckNames.size() && aiDeckNames.get(i) != null && !aiDeckNames.get(i).isBlank()) {
+                aiName = aiDeckNames.get(i).trim();
+                if (aiName.length() > 40) aiName = aiName.substring(0, 40);
+            }
+            String candidate = aiName;
+            for (int n = 2; usedNames.contains(candidate); n++) candidate = aiName + " " + n;
+            usedNames.add(candidate);
+            LobbyPlayerAi aiLobby = new LobbyPlayerAi(candidate, null);
             Deck aiDeck = (i < aiDeckList.size()) ? aiDeckList.get(i) : humanDeck;
             RegisteredPlayer aiReg = RegisteredPlayer.forCommander(aiDeck);
             aiReg.setPlayer(aiLobby);
