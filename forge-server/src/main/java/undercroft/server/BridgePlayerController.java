@@ -205,6 +205,23 @@ public class BridgePlayerController extends PlayerController {
                 obj.addProperty("zone", card.getZone() != null ? card.getZone().getZoneType().name() : "unknown");
                 obj.addProperty("owner", card.getOwner().getName());
                 obj.addProperty("controller", card.getController().getName());
+                // Enough to read the card, not just recognise its name. Library cards never
+                // reach the client as instances (the library is a count), so a tutor or scry
+                // prompt was a list of names with nothing behind them — a player who did not
+                // know every card by heart was choosing blind. Each guarded separately: a
+                // face-down or split card can throw on one accessor and still name the rest.
+                try { obj.addProperty("manaCost", card.getManaCost().toString()); } catch (Exception ignored) { }
+                try { obj.addProperty("oracleText", card.getOracleText()); } catch (Exception ignored) { }
+                try {
+                    var cs = card.getColor();
+                    StringBuilder colors = new StringBuilder();
+                    if (cs.hasWhite()) colors.append('W');
+                    if (cs.hasBlue()) colors.append('U');
+                    if (cs.hasBlack()) colors.append('B');
+                    if (cs.hasRed()) colors.append('R');
+                    if (cs.hasGreen()) colors.append('G');
+                    obj.addProperty("colors", colors.toString());
+                } catch (Exception ignored) { }
             } else if (e instanceof Player p) {
                 obj.addProperty("type", "player");
                 obj.addProperty("life", p.getLife());
