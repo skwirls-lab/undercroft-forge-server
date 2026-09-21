@@ -130,7 +130,7 @@ public class GameSession {
         guiGame.setGameView(game.getView());
 
         // Subscribe to game events
-        game.subscribeToEvents(new GameEventForwarder(wsContext, gson));
+        game.subscribeToEvents(new GameEventForwarder(wsContext, gson, game, humanController.getPlayer()));
 
         // Run game loop in background thread
         gameThread = new Thread(() -> {
@@ -211,6 +211,26 @@ public class GameSession {
         payload.addProperty("winner", winner != null ? winner.getPlayer().getName() : "draw");
         payload.addProperty("winnerIsHuman", winner != null && winner.getPlayer().getName().equals(
                 humanController != null ? humanController.getPlayer().getName() : ""));
+        payload.addProperty("turns", game.getPhaseHandler().getTurn());
+        // Every seat's outcome, for the match record: who lost, how, and with what.
+        JsonArray seats = new JsonArray();
+        for (Player p : game.getRegisteredPlayers()) {
+            JsonObject seat = new JsonObject();
+            seat.addProperty("name", p.getName());
+            seat.addProperty("isAI", p.getController().isAI());
+            seat.addProperty("life", p.getLife());
+            seat.addProperty("poison", p.getPoisonCounters());
+            seat.addProperty("won", p.getOutcome() != null && p.getOutcome().hasWon());
+            seat.addProperty("eliminated", p.hasLost());
+            if (p.getOutcome() != null && p.getOutcome().lossState != null) {
+                seat.addProperty("lossReason", p.getOutcome().lossState.name());
+                if (p.getOutcome().loseConditionSpell != null) {
+                    seat.addProperty("lossSpell", p.getOutcome().loseConditionSpell);
+                }
+            }
+            seats.add(seat);
+        }
+        payload.add("seats", seats);
         ForgeServer.sendMessage(wsContext, "game_over", payload);
     }
 

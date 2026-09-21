@@ -448,11 +448,82 @@ public class BridgePlayerController extends PlayerController {
         return affected; // Auto-distribute
     }
 
+    /**
+     * "Add X mana in any combination of {U} and/or {R}" — Vivi Ornitier, Cryptolith Rite's
+     * cousins, every "in any combination" source. The engine asks once for the whole amount.
+     * Returning all-colourless (the previous default) meant such mana could pay only generic
+     * costs, so a {4}{U} ability paid four from Vivi and still wanted the {U}.
+     *
+     * Mirrors PlayerControllerHuman.specifyManaCombo: the player splits the amount across the
+     * colours offered; "Different" caps each colour at one. An answer short of the amount is
+     * topped up from the colours offered, never with colourless.
+     */
     @Override
     public Map<Byte, Integer> specifyManaCombo(SpellAbility sa, ColorSet colorSet, int manaAmount, boolean different) {
-        // Default: all colorless
+        List<MagicColor.Color> options = new ArrayList<>();
+        if (colorSet != null) {
+            for (MagicColor.Color color : colorSet) {
+                if (color != MagicColor.Color.COLORLESS && !options.contains(color)) {
+                    options.add(color);
+                }
+            }
+        }
         Map<Byte, Integer> result = new HashMap<>();
-        result.put((byte) 0, manaAmount);
+        if (options.isEmpty()) {
+            result.put((byte) 0, manaAmount);
+            return result;
+        }
+        if (options.size() == 1 && !different) {
+            result.put(options.get(0).getColorMask(), manaAmount);
+            return result;
+        }
+
+        String host = sa != null && sa.getHostCard() != null ? sa.getHostCard().getName() : "";
+        JsonObject data = new JsonObject();
+        data.addProperty("prompt", host.isEmpty() ? "Choose " + manaAmount + " mana" : host + " — choose " + manaAmount + " mana");
+        data.addProperty("cardName", host);
+        data.addProperty("amount", manaAmount);
+        data.addProperty("different", different);
+        JsonArray arr = new JsonArray();
+        for (MagicColor.Color color : options) {
+            JsonObject o = new JsonObject();
+            o.addProperty("mask", color.getColorMask());
+            o.addProperty("name", color.getName());
+            o.addProperty("symbol", color.getShortName());
+            arr.add(o);
+        }
+        data.add("colors", arr);
+
+        JsonObject response = requestChoice("choose_mana_combo", data);
+
+        int total = 0;
+        if (response.has("counts") && response.get("counts").isJsonObject()) {
+            JsonObject counts = response.getAsJsonObject("counts");
+            for (MagicColor.Color color : options) {
+                String key = String.valueOf(color.getColorMask());
+                if (!counts.has(key)) continue;
+                int n;
+                try { n = Math.max(0, counts.get(key).getAsInt()); } catch (Exception e) { continue; }
+                if (different) n = Math.min(n, 1);
+                n = Math.min(n, manaAmount - total);
+                if (n > 0) {
+                    result.merge(color.getColorMask(), n, Integer::sum);
+                    total += n;
+                }
+            }
+        }
+        for (int i = 0; total < manaAmount && i < manaAmount * options.size(); i++) {
+            MagicColor.Color c = options.get(i % options.size());
+            if (different && result.containsKey(c.getColorMask())) {
+                if (i >= options.size()) break;
+                continue;
+            }
+            result.merge(c.getColorMask(), 1, Integer::sum);
+            total++;
+        }
+        if (total < manaAmount) {
+            log.warn("specifyManaCombo: could only place {} of {} mana", total, manaAmount);
+        }
         return result;
     }
 
@@ -1320,10 +1391,15 @@ public class BridgePlayerController extends PlayerController {
             }
         }
 
+        // Life promised for Phyrexian shards ({U/P}: one blue or two life). Deferred until the
+        // cost is fully paid, as InputPayManaOfCostPayment does, so a cancelled cast costs none.
+        int lifeToPay = 0;
+
         int maxIterations = 20;
         for (int i = 0; i < maxIterations; i++) {
             if (manaCost.isPaid()) {
                 log.info("payManaCost: fully paid after {} taps", i);
+                settlePhyrexianLife(sa, lifeToPay);
                 return true;
             }
 
@@ -1344,7 +1420,9 @@ public class BridgePlayerController extends PlayerController {
                 }
             }
 
-            if (sources.isEmpty()) {
+            boolean lifeOffer = manaCost.containsPhyrexianMana() && player.canPayLife(lifeToPay + 2, false, sa);
+
+            if (sources.isEmpty() && !lifeOffer) {
                 // Try paying from pool first (e.g. mana already floating)
                 boolean paidFromPool = false;
                 for (byte color : ManaAtom.MANATYPES) {
@@ -1357,6 +1435,7 @@ public class BridgePlayerController extends PlayerController {
                 }
                 if (manaCost.isPaid()) {
                     log.info("payManaCost: paid from pool");
+                    settlePhyrexianLife(sa, lifeToPay);
                     return true;
                 }
                 log.info("payManaCost: no untapped mana sources and pool insufficient — cannot pay");
@@ -1368,6 +1447,12 @@ public class BridgePlayerController extends PlayerController {
             data.addProperty("manaCost", manaCost.toString());
             data.addProperty("spellName", sa.getHostCard().getName());
             data.addProperty("canCancel", true);
+            if (lifeOffer) {
+                // {W/P}, {U/P}, ...: the player may pay two life instead of the mana. The
+                // option was simply never offered before.
+                data.addProperty("lifeForPhyrexian", 2);
+                data.addProperty("lifePromised", lifeToPay);
+            }
             // Send full card data so frontend can display clickable land buttons
             JsonArray sourcesArray = new JsonArray();
             for (Card c : sources) {
@@ -1386,6 +1471,15 @@ public class BridgePlayerController extends PlayerController {
                 return false;
             }
 
+            if (response.has("payLife") && response.get("payLife").getAsBoolean()) {
+                if (lifeOffer && manaCost.payPhyrexian()) {
+                    sa.setSpendPhyrexianMana(true);
+                    lifeToPay += 2;
+                    log.info("payManaCost: two life promised for a Phyrexian shard — remaining={}", manaCost);
+                }
+                continue;
+            }
+
             if (response.has("cardId")) {
                 int cardId = response.get("cardId").getAsInt();
                 Card chosen = null;
@@ -1401,7 +1495,12 @@ public class BridgePlayerController extends PlayerController {
                         // Pay tap cost and resolve (same as HumanPlay.playSpellAbility for mana)
                         CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
                         if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
-                            ma.resolve();
+                            // Through the stack, as HumanPlaySpellAbility does. A mana ability
+                            // never waits there — MagicStack.add resolves it at once — but on
+                            // the way it counts the activation (so "activate only once each
+                            // turn" holds: Vivi Ornitier could be tapped for mana all turn) and
+                            // fires the tapped-for-mana triggers. A bare ma.resolve() did neither.
+                            getGame().getStack().add(ma);
                             // Apply produced mana to the cost being paid
                             player.getManaPool().payManaFromAbility(sa, manaCost, ma);
                             log.info("payManaCost: tapped {} — remaining={}", chosen.getName(), manaCost);
@@ -1412,7 +1511,17 @@ public class BridgePlayerController extends PlayerController {
             }
         }
 
-        return manaCost.isPaid();
+        boolean paid = manaCost.isPaid();
+        if (paid) settlePhyrexianLife(sa, lifeToPay);
+        return paid;
+    }
+
+    /** Pay the life promised for Phyrexian shards, once the rest of the cost is in. */
+    private void settlePhyrexianLife(SpellAbility sa, int life) {
+        if (life <= 0) return;
+        if (!player.payLife(life, sa, false)) {
+            log.warn("payManaCost: could not pay {} life promised for Phyrexian mana", life);
+        }
     }
 
     @Override
@@ -1472,7 +1581,13 @@ public class BridgePlayerController extends PlayerController {
         // (HumanPlay.chooseOptionalAdditionalCosts), which the bridge never invoked, so these
         // costs were unreachable no matter what the player wanted.
         if (sa.isSpell() && !source.isCopiedSpell()) {
-            sa = chooseOptionalAdditionalCosts(sa);
+            SpellAbility withCosts = chooseOptionalAdditionalCosts(sa);
+            if (withCosts == null) {
+                log.info("playChosenSpellAbility: {} — player backed out at the cost prompt", source.getName());
+                game.clearTopLibsCast(sa);
+                return false;
+            }
+            sa = withCosts;
         }
 
         // Move spell to stack (will be rolled back if payment fails)
@@ -1544,9 +1659,19 @@ public class BridgePlayerController extends PlayerController {
      */
     private SpellAbility chooseOptionalAdditionalCosts(SpellAbility original) {
         final List<SpellAbility> abilities = GameActionUtil.getAdditionalCostSpell(original);
-        SpellAbility chosen = getAbilityToPlay(original.getHostCard(), abilities);
-        if (chosen == null) {
-            chosen = original;
+        SpellAbility chosen;
+        if (abilities.size() <= 1) {
+            // Nothing to choose between. The prompt used to appear for every single spell
+            // with one entry in it, and "Never mind" there fell through to the original —
+            // straight into mana payment, with a second Cancel to press.
+            chosen = abilities.isEmpty() ? original : abilities.get(0);
+        } else {
+            chosen = getAbilityToPlay(original.getHostCard(), abilities);
+            if (chosen == null) {
+                // The player backed out of casting. Null tells playChosenSpellAbility to stop
+                // before the card moves to the stack; nothing has been paid yet.
+                return null;
+            }
         }
 
         List<OptionalCostValue> list = GameActionUtil.getOptionalCostValues(chosen);

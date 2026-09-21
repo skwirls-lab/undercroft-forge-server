@@ -96,6 +96,14 @@ public class GameStateSerializer {
         player.addProperty("life", p.getLife());
         player.addProperty("poison", p.getPoisonCounters());
         player.addProperty("isAI", p.getController().isAI());
+        // Out of the game, and why. The client used to guess from life alone.
+        player.addProperty("eliminated", p.hasLost());
+        if (p.hasLost() && p.getOutcome() != null && p.getOutcome().lossState != null) {
+            player.addProperty("lossReason", p.getOutcome().lossState.name());
+            if (p.getOutcome().loseConditionSpell != null) {
+                player.addProperty("lossSpell", p.getOutcome().loseConditionSpell);
+            }
+        }
         player.addProperty("isActivePlayer", game.getPhaseHandler().getPlayerTurn() == p);
         player.addProperty("hasPriority", game.getPhaseHandler().getPriorityPlayer() == p);
 
