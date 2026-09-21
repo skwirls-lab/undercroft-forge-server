@@ -263,6 +263,11 @@ public class BridgePlayerController extends PlayerController {
         data.add("abilities", serializeSpellAbilities(abilities));
 
         JsonObject response = requestChoice("choose_ability", data);
+        // Null is a real answer here: the card is simply not played. The client's "Never mind"
+        // sends cancel:true (and index -1, for servers that only bounds-check).
+        if (response.has("cancel") && response.get("cancel").getAsBoolean()) {
+            return null;
+        }
         int index = response.has("index") ? response.get("index").getAsInt() : 0;
         return (index >= 0 && index < abilities.size()) ? abilities.get(index) : null;
     }
@@ -529,15 +534,10 @@ public class BridgePlayerController extends PlayerController {
             return true;
         }
 
-        JsonArray targetsArr = new JsonArray();
-        for (GameEntity ge : validTargets) {
-            JsonObject t = new JsonObject();
-            t.addProperty("id", ge.getId());
-            t.addProperty("name", ge.getName());
-            t.addProperty("type", ge instanceof Card ? "card" : "player");
-            targetsArr.add(t);
-        }
-        data.add("validTargets", targetsArr);
+        // The same shape as every other card prompt: type line, P/T, zone, owner, controller,
+        // text. Targets used to be bare id/name/type, so an "any target" prompt in a pod could
+        // not say whose creature was whose.
+        data.add("validTargets", serializeCards(validTargets));
         data.addProperty("minTargets", minTargets);
         data.addProperty("maxTargets", maxTargets);
 
