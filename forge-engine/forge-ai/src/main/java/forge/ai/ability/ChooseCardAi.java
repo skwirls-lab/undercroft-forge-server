@@ -1,6 +1,5 @@
 package forge.ai.ability;
 
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import forge.ai.*;
 import forge.game.Game;
@@ -15,7 +14,6 @@ import forge.game.zone.ZoneType;
 import forge.util.Aggregates;
 import forge.util.IterableUtil;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -35,7 +33,7 @@ public class ChooseCardAi extends SpellAbilityAi {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
 
-            sa.getTargets().add(Iterables.getFirst(oppList, null));
+            sa.getTargets().add(oppList.get(0));
         }
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
@@ -59,9 +57,10 @@ public class ChooseCardAi extends SpellAbilityAi {
         if (sa.hasParam("Choices")) {
             choices = CardLists.getValidCards(choices, sa.getParam("Choices"), host.getController(), host, sa);
         }
-        if (sa.hasParam("TargetControls")) {
+        if ("Chooser".equals(sa.getParam("ControlledByPlayer"))) {
             choices = CardLists.filterControlledBy(choices, ai.getOpponents());
         }
+
         if (aiLogic.equals("AtLeast1") || aiLogic.equals("OppPreferred")) {
             return !choices.isEmpty();
         } else if (aiLogic.equals("AtLeast2") || aiLogic.equals("BestBlocker")) {
@@ -204,7 +203,7 @@ public class ChooseCardAi extends SpellAbilityAi {
             CardCollectionView oppControlled = CardLists.filterControlledBy(options, ai.getOpponents());
             if (!oppControlled.isEmpty()) {
                 choice = ComputerUtilCard.getBestAI(oppControlled);
-            } else {
+            } else if (!isOptional) {
                 CardCollectionView aiControlled = CardLists.filterControlledBy(options, ai);
                 choice = ComputerUtilCard.getWorstAI(aiControlled);
             }
@@ -214,8 +213,7 @@ public class ChooseCardAi extends SpellAbilityAi {
             if (creats.isEmpty()) {
                 choice = ComputerUtilCard.getWorstAI(options);
             } else {
-                CardLists.sortByCmcDesc(creats);
-                Collections.reverse(creats);
+                creats.sort(CardLists.CmcComparator);
                 choice = creats.get(0);
             }
         } else if ("NegativePowerFirst".equals(logic)) {

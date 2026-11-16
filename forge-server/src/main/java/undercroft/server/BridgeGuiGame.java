@@ -3,40 +3,45 @@ package undercroft.server;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import forge.LobbyPlayer;
-import forge.ai.GameState;
 import forge.deck.CardPool;
 import forge.game.GameEntityView;
 import forge.game.GameView;
 import forge.game.card.CardView;
 import forge.game.event.GameEvent;
-import forge.game.event.GameEventSpellAbilityCast;
-import forge.game.event.GameEventSpellRemovedFromStack;
 import forge.game.phase.PhaseType;
 import forge.game.player.DelayedReveal;
 import forge.game.player.IHasIcon;
 import forge.game.player.PlayerView;
 import forge.game.spellability.SpellAbilityView;
-import forge.game.zone.ZoneType;
+import forge.gamemodes.match.Selection;
+import forge.gamemodes.match.YieldUpdate;
 import forge.gui.control.PlaybackSpeed;
 import forge.gui.interfaces.IGuiGame;
 import forge.interfaces.IGameController;
+import forge.interfaces.IMacroSystem;
 import forge.item.PaperCard;
 import forge.localinstance.skin.FSkinProp;
 import forge.player.PlayerZoneUpdate;
-import forge.player.PlayerZoneUpdates;
 import forge.trackable.TrackableCollection;
 import forge.util.FSerializableFunction;
 import forge.util.ITriggerEvent;
 import io.javalin.websocket.WsContext;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Implements Forge's IGuiGame interface, forwarding UI update calls
  * to the WebSocket client as JSON messages.
  *
- * Most methods here push "game_event" or "game_state" messages.
- * Choice/dialog methods are handled by BridgePlayerController instead.
+ * Most of the interface is display bookkeeping for a real screen (zones to open, cards to
+ * highlight, yield markers), which a headless bridge has no use for; since 2.0.14 those carry
+ * defaults upstream and are left alone here. Every decision a player makes goes through
+ * BridgePlayerController, never through these dialog methods, which answer with safe defaults
+ * only so an unexpected caller cannot hang the engine.
  */
 public class BridgeGuiGame implements IGuiGame {
     private final WsContext wsContext;
@@ -80,20 +85,12 @@ public class BridgeGuiGame implements IGuiGame {
     }
 
     @Override
-    public void showPromptMessage(PlayerView playerView, String message) {
+    public void showPromptMessage(PlayerView playerView, String message, CardView card) {
         JsonObject data = new JsonObject();
-        data.addProperty("player", playerView.getName());
+        data.addProperty("player", playerView != null ? playerView.getName() : "");
         data.addProperty("message", message);
         sendUiEvent("prompt", data);
     }
-
-    @Override
-    public void showCardPromptMessage(PlayerView playerView, String message, CardView card) {
-        showPromptMessage(playerView, message);
-    }
-
-    @Override
-    public void updateButtons(PlayerView owner, boolean okEnabled, boolean cancelEnabled, boolean focusOk) {}
 
     @Override
     public void updateButtons(PlayerView owner, String label1, String label2, boolean enable1, boolean enable2, boolean focus1) {}
@@ -115,24 +112,9 @@ public class BridgeGuiGame implements IGuiGame {
     }
 
     @Override
-    public void updatePlayerControl() {}
-
-    @Override
-    public void enableOverlay() {}
-
-    @Override
-    public void disableOverlay() {}
-
-    @Override
     public void finishGame() {
         sendUiEvent("game_finished");
     }
-
-    @Override
-    public void showManaPool(PlayerView player) {}
-
-    @Override
-    public void hideManaPool(PlayerView player) {}
 
     @Override
     public void updateStack() {
@@ -140,26 +122,9 @@ public class BridgeGuiGame implements IGuiGame {
     }
 
     @Override
-    public void notifyStackAddition(GameEventSpellAbilityCast event) {}
-
-    @Override
-    public void notifyStackRemoval(GameEventSpellRemovedFromStack event) {}
-
-    @Override
-    public void handleLandPlayed(CardView land) {}
-
-    @Override
     public void handleGameEvent(GameEvent event) {
         // Events are handled by GameEventForwarder separately
     }
-
-    @Override
-    public Iterable<PlayerZoneUpdate> tempShowZones(PlayerView controller, Iterable<PlayerZoneUpdate> zonesToUpdate) {
-        return zonesToUpdate;
-    }
-
-    @Override
-    public void hideZones(PlayerView controller, Iterable<PlayerZoneUpdate> zonesToUpdate) {}
 
     @Override
     public void updateZones(Iterable<PlayerZoneUpdate> zonesToUpdate) {
@@ -167,25 +132,8 @@ public class BridgeGuiGame implements IGuiGame {
     }
 
     @Override
-    public void updateSingleCard(CardView card) {}
-
-    @Override
-    public void updateCards(Iterable<CardView> cards) {}
-
-    @Override
-    public void updateRevealedCards(TrackableCollection<CardView> collection) {}
-
-    @Override
-    public void refreshCardDetails(Iterable<CardView> cards) {}
-
-    @Override
     public void refreshField() {
         sendUiEvent("field_refresh");
-    }
-
-    @Override
-    public GameState getGamestate() {
-        return null;
     }
 
     @Override
@@ -197,12 +145,6 @@ public class BridgeGuiGame implements IGuiGame {
     public void updateLives(Iterable<PlayerView> livesUpdate) {
         sendUiEvent("lives_update");
     }
-
-    @Override
-    public void updateShards(Iterable<PlayerView> shardsUpdate) {}
-
-    @Override
-    public void updateDependencies() {}
 
     @Override
     public void setPanelSelection(CardView hostCard) {}
@@ -230,25 +172,10 @@ public class BridgeGuiGame implements IGuiGame {
     }
 
     @Override
-    public void message(String message) {}
-
-    @Override
     public void message(String message, String title) {}
 
     @Override
-    public void showErrorDialog(String message) {}
-
-    @Override
     public void showErrorDialog(String message, String title) {}
-
-    @Override
-    public boolean showConfirmDialog(String message, String title) { return true; }
-
-    @Override
-    public boolean showConfirmDialog(String message, String title, boolean defaultYes) { return defaultYes; }
-
-    @Override
-    public boolean showConfirmDialog(String message, String title, String yesButtonText, String noButtonText) { return true; }
 
     @Override
     public boolean showConfirmDialog(String message, String title, String yesButtonText, String noButtonText, boolean defaultYes) { return defaultYes; }
@@ -259,43 +186,17 @@ public class BridgeGuiGame implements IGuiGame {
     }
 
     @Override
-    public String showInputDialog(String message, String title, boolean isNumeric) { return ""; }
-
-    @Override
-    public String showInputDialog(String message, String title, FSkinProp icon) { return ""; }
-
-    @Override
-    public String showInputDialog(String message, String title, FSkinProp icon, String initialInput) { return initialInput; }
-
-    @Override
     public String showInputDialog(String message, String title, FSkinProp icon, String initialInput, List<String> inputOptions, boolean isNumeric) {
         return inputOptions != null && !inputOptions.isEmpty() ? inputOptions.get(0) : initialInput;
     }
 
     @Override
-    public boolean confirm(CardView c, String question) { return true; }
-
-    @Override
-    public boolean confirm(CardView c, String question, List<String> options) { return true; }
-
-    @Override
     public boolean confirm(CardView c, String question, boolean defaultIsYes, List<String> options) { return defaultIsYes; }
-
-    @Override
-    public <T> List<T> getChoices(String message, int min, int max, List<T> choices) {
-        return choices.subList(0, Math.min(min, choices.size()));
-    }
 
     @Override
     public <T> List<T> getChoices(String message, int min, int max, List<T> choices, List<T> selected, FSerializableFunction<T, String> display) {
         return choices.subList(0, Math.min(min, choices.size()));
     }
-
-    @Override
-    public Integer getInteger(String message, int min) { return min; }
-
-    @Override
-    public Integer getInteger(String message, int min, int max) { return min; }
 
     @Override
     public Integer getInteger(String message, int min, int max, boolean sortDesc) { return min; }
@@ -309,11 +210,6 @@ public class BridgeGuiGame implements IGuiGame {
     }
 
     @Override
-    public <T> T one(String message, List<T> choices) {
-        return choices.isEmpty() ? null : choices.get(0);
-    }
-
-    @Override
     public <T> T one(String message, List<T> choices, FSerializableFunction<T, String> display) {
         return choices.isEmpty() ? null : choices.get(0);
     }
@@ -322,29 +218,14 @@ public class BridgeGuiGame implements IGuiGame {
     public <T> void reveal(String message, List<T> items) {}
 
     @Override
-    public <T> List<T> many(String title, String topCaption, int cnt, List<T> sourceChoices, CardView c) {
-        return sourceChoices.subList(0, Math.min(cnt, sourceChoices.size()));
-    }
-
-    @Override
-    public <T> List<T> many(String title, String topCaption, int min, int max, List<T> sourceChoices, CardView c) {
-        return sourceChoices.subList(0, Math.min(min, sourceChoices.size()));
-    }
-
-    @Override
     public <T> List<T> many(String title, String topCaption, int min, int max, List<T> sourceChoices, List<T> destChoices, CardView c) {
         return sourceChoices.subList(0, Math.min(min, sourceChoices.size()));
     }
 
     @Override
-    public <T> List<T> order(String title, String top, List<T> sourceChoices, CardView c) {
-        return sourceChoices;
-    }
-
-    @Override
-    public <T> List<T> order(String title, String top, int remainingObjectsMin, int remainingObjectsMax,
-            List<T> sourceChoices, List<T> destChoices, CardView referenceCard, boolean sideboardingMode) {
-        return sourceChoices;
+    public <T> OrderResult<T> order(String title, String top, int remainingObjectsMin, int remainingObjectsMax,
+            List<T> sourceChoices, List<T> destChoices, CardView referenceCard, boolean sideboardingMode, boolean showRememberCheckbox) {
+        return new OrderResult<>(sourceChoices, false);
     }
 
     @Override
@@ -386,25 +267,7 @@ public class BridgeGuiGame implements IGuiGame {
     public void setPlayerAvatar(LobbyPlayer player, IHasIcon ihi) {}
 
     @Override
-    public PlayerZoneUpdates openZones(PlayerView controller, Collection<ZoneType> zones,
-            Map<PlayerView, Object> players, boolean backupLastZones) {
-        return new PlayerZoneUpdates();
-    }
-
-    @Override
-    public void restoreOldZones(PlayerView playerView, PlayerZoneUpdates playerZoneUpdates) {}
-
-    @Override
-    public void setHighlighted(PlayerView pv, boolean b) {}
-
-    @Override
-    public void setUsedToPay(CardView card, boolean value) {}
-
-    @Override
-    public void setSelectables(Iterable<CardView> cards) {}
-
-    @Override
-    public void clearSelectables() {}
+    public void setSelection(Selection selection) {}
 
     @Override
     public boolean isSelecting() { return false; }
@@ -434,49 +297,19 @@ public class BridgeGuiGame implements IGuiGame {
     public void cancelAwaitNextInput() {}
 
     @Override
-    public boolean isUiSetToSkipPhase(PlayerView playerTurn, PhaseType phase) { return false; }
-
-    @Override
-    public void autoPassUntilEndOfTurn(PlayerView player) {}
-
-    @Override
-    public boolean mayAutoPass(PlayerView player) { return false; }
-
-    @Override
-    public void autoPassCancel(PlayerView player) {}
-
-    @Override
     public void updateAutoPassPrompt() {}
-
-    @Override
-    public boolean shouldAutoYield(String key) { return false; }
-
-    @Override
-    public void setShouldAutoYield(String key, boolean autoYield) {}
-
-    @Override
-    public boolean shouldAlwaysAcceptTrigger(int trigger) { return false; }
-
-    @Override
-    public boolean shouldAlwaysDeclineTrigger(int trigger) { return false; }
-
-    @Override
-    public void setShouldAlwaysAcceptTrigger(int trigger) {}
-
-    @Override
-    public void setShouldAlwaysDeclineTrigger(int trigger) {}
-
-    @Override
-    public void setShouldAlwaysAskTrigger(int trigger) {}
-
-    @Override
-    public void clearAutoYields() {}
 
     @Override
     public void setCurrentPlayer(PlayerView player) {}
 
     @Override
-    public void showWaitingTimer(PlayerView forPlayer, String waitingForPlayerName) {}
+    public boolean isUiSetToSkipPhase(PlayerView playerTurn, PhaseType phase) { return false; }
+
+    @Override
+    public void applyYieldUpdate(YieldUpdate update) {}
+
+    @Override
+    public void applyMacroState(IMacroSystem.State state) {}
 
     @Override
     public boolean isNetGame() { return false; }

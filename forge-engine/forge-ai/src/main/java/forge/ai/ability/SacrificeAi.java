@@ -98,8 +98,7 @@ public class SacrificeAi extends SpellAbilityAi {
             }
 
             if (num.equals("X") && sa.getSVar(num).equals("Count$xPaid")) {
-                // Set PayX here to maximum value.
-                sa.setXManaCostPaid(Math.min(ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger()), amount));
+                sa.setXManaCostPaid(Math.min(ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger()), amount));
             }
 
             final int half = (amount / 2) + (amount % 2); // Half of amount rounded up
@@ -127,8 +126,7 @@ public class SacrificeAi extends SpellAbilityAi {
             int amount = AbilityUtils.calculateAmount(source, num, sa);
 
             if (num.equals("X") && sa.getSVar(num).equals("Count$xPaid")) {
-                // Set PayX here to maximum value.
-                amount = Math.min(ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger()), amount);
+                amount = Math.min(ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger()), amount);
             }
 
             List<Card> humanList = CardLists.getValidCards(ai.getStrongestOpponent().getCardsIn(ZoneType.Battlefield), valid, sa.getActivatingPlayer(), source, sa);
@@ -156,9 +154,8 @@ public class SacrificeAi extends SpellAbilityAi {
 
                     if (c.hasSVar("SacMe") || isLethal) {
                         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-                    } else {
-                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                     }
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
                 if (c.hasSVar("SacMe") || ComputerUtilCard.evaluateCreature(c) <= 135) {
                     return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -219,6 +216,13 @@ public class SacrificeAi extends SpellAbilityAi {
             if (!p.sameTeam(payer)) {
                 return false;
             }
+        }
+
+        // don't keep paying for an "exile until leaves" permanent that no longer exiles anything (e.g. Static Prison)
+        final Card source = sa.getHostCard();
+        if (source.hasSVar("OblivionRing") && "Self".equals(sa.getParamOrDefault("SacValid", "Self"))
+                && source.getUntilLeavesBattlefield().isEmpty()) {
+            return false;
         }
 
         return super.willPayUnlessCost(payer, sa, cost, alreadyPaid, payers);

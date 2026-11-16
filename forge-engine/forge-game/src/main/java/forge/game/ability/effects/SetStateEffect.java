@@ -2,7 +2,6 @@ package forge.game.ability.effects;
 
 import forge.card.CardStateName;
 import forge.game.Game;
-import forge.game.GameEntityCounterTable;
 import forge.game.GameLogEntryType;
 import forge.game.ability.AbilityKey;
 import forge.game.ability.AbilityUtils;
@@ -29,7 +28,7 @@ public class SetStateEffect extends SpellAbilityEffect {
     protected String getStackDescription(final SpellAbility sa) {
         final Card host = sa.getHostCard();
         final StringBuilder sb = new StringBuilder();
-        boolean specialize = sa.getParam("Mode").equals("Specialize");
+        boolean specialize = "Specialize".equals(sa.getParam("Mode"));
 
         if (sa.hasParam("Flip")) {
             sb.append("Flip ");
@@ -77,8 +76,6 @@ public class SetStateEffect extends SpellAbilityEffect {
             cardsToTransform = getTargetCards(sa);
         }
 
-        GameEntityCounterTable table = new GameEntityCounterTable();
-
         for (final Card tgtCard : cardsToTransform) {
             // check if the object is still in game or if it was moved
             Card gameCard = game.getCardState(tgtCard, null);
@@ -124,7 +121,7 @@ public class SetStateEffect extends SpellAbilityEffect {
                         game.getAction().reveal(new CardCollection(lki), lki.getOwner(), true, Localizer.getInstance().getMessage("lblFaceDownCardCantTurnFaceUp"));
                         continue;
                     }
-                } else if (!gameCard.getState(CardStateName.Original).getType().isPermanent()) {
+                } else if (!gameCard.getRules().getType().isPermanent()) {
                     Card lki = CardCopyService.getLKICopy(gameCard);
                     lki.forceTurnFaceUp();
                     game.getAction().reveal(new CardCollection(lki), lki.getOwner(), true, Localizer.getInstance().getMessage("lblFaceDownCardCantTurnFaceUp"));
@@ -164,12 +161,12 @@ public class SetStateEffect extends SpellAbilityEffect {
 
             if (optional) {
                 String message = TextUtil.concatWithSpace("Transform", gameCard.getDisplayName(), "?");
-                if (!p.getController().confirmAction(sa, PlayerActionConfirmMode.Random, message, null)) {
+                if (!p.getController().confirmAction(sa, PlayerActionConfirmMode.Random, message, gameCard, null)) {
                     return;
                 }
             }
 
-            boolean hasTransformed = false;
+            boolean hasTransformed;
             if (sa.isTurnFaceUp()) {
                 hasTransformed = gameCard.turnFaceUp(sa);
             } else if ("Specialize".equals(mode)) {
@@ -203,9 +200,6 @@ public class SetStateEffect extends SpellAbilityEffect {
                     game.fireEvent(new GameEventAddLog(GameLogEntryType.STACK_RESOLVE, sb));
                 }
                 game.fireEvent(new GameEventCardStatsChanged(gameCard));
-                if (sa.hasParam("Mega")) { // TODO move Megamorph into an Replacement Effect
-                    gameCard.addCounter(CounterEnumType.P1P1, 1, p, table);
-                }
                 if (remChanged) {
                     host.addRemembered(gameCard);
                 }
@@ -224,7 +218,6 @@ public class SetStateEffect extends SpellAbilityEffect {
                 }
             }
         }
-        table.replaceCounterEffect(game, sa, true);
         if (!transformedCards.isEmpty()) {
             game.getAction().reveal(transformedCards, p, true, "Transformed cards in ");
         }

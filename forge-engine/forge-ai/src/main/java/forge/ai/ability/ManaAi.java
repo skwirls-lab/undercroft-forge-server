@@ -8,7 +8,6 @@ import forge.card.mana.ManaCost;
 import forge.game.CardTraitPredicates;
 import forge.game.ability.AbilityUtils;
 import forge.game.card.*;
-import forge.game.cost.CostPart;
 import forge.game.cost.CostRemoveCounter;
 import forge.game.keyword.Keyword;
 import forge.game.mana.Mana;
@@ -76,7 +75,7 @@ public class ManaAi extends SpellAbilityAi {
              return ph.is(PhaseType.MAIN2, ai) || ph.is(PhaseType.MAIN1, ai);
         }
         if ("AtOppEOT".equals(logic)) {
-            return ph.is(PhaseType.END_OF_TURN) && ph.getNextTurn() == ai
+            return ph.is(PhaseType.END_OF_TURN) && ph.isPlayerNextTurn(ai)
                     && (!ai.getManaPool().hasBurn() || !ai.canLoseLife() || ai.cantLoseForZeroOrLessLife());
         }
         return super.checkPhaseRestrictions(ai, sa, ph, logic);
@@ -145,9 +144,12 @@ public class ManaAi extends SpellAbilityAi {
                 return true;
             }
         }
-        
+
         CardCollection manaSources = ComputerUtilMana.getAvailableManaSources(ai, true);
         int numManaSrcs = manaSources.size();
+        if (manaSources.contains(host) && ComputerUtilCost.isSacrificeSelfCost(sa.getRootAbility().getPayCosts())) {
+            numManaSrcs--;
+        }
         int manaReceived = sa.hasParam("Amount") ? AbilityUtils.calculateAmount(host, sa.getParam("Amount"), sa) : 1;
         manaReceived *= sa.getParam("Produced").split(" ").length;
 
@@ -159,13 +161,7 @@ public class ManaAi extends SpellAbilityAi {
         int numCounters = 0;
         int manaSurplus = 0;
         if ("Count$xPaid".equals(host.getSVar("X")) && sa.getPayCosts().hasSpecificCostType(CostRemoveCounter.class)) {
-            CounterType ctrType = CounterEnumType.KI; // Petalmane Baku
-            for (CostPart part : sa.getPayCosts().getCostParts()) {
-                if (part instanceof CostRemoveCounter) {
-                    ctrType = ((CostRemoveCounter)part).counter;
-                    break;
-                }
-            }
+            CounterType ctrType = sa.getPayCosts().getCostPartByType(CostRemoveCounter.class).counter;
             numCounters = host.getCounters(ctrType);
             manaReceived = numCounters;
             if (logic.startsWith("ManaRitualBattery.")) {
@@ -194,11 +190,15 @@ public class ManaAi extends SpellAbilityAi {
         CardCollection cardList = new CardCollection();
         // TODO check other zones
         List<SpellAbility> all = ComputerUtilAbility.getSpellAbilities(ai.getCardsIn(ZoneType.Hand), ai);
-        for (final SpellAbility testSa : ComputerUtilAbility.getOriginalAndAltCostAbilities(all, ai)) {
+        final List<SpellAbility> testable = ComputerUtilAbility.getOriginalAndAltCostAbilities(all, ai);
+        // the same untapped sources answer this for every ability in hand, and nothing in the loop
+        // taps or adds one, so ask once - and not at all when there is nothing to ask about
+        final byte availableColors = testable.isEmpty() ? 0 : ColorSet.fromNames(
+                ComputerUtilCost.getAvailableManaColors(ai, (List<Card>)null)).getColor();
+        for (final SpellAbility testSa : testable) {
             ManaCost cost = testSa.getPayCosts().getTotalMana();
-            boolean canPayWithAvailableColors = cost.canBePaidWithAvailable(ColorSet.fromNames(
-                    ComputerUtilCost.getAvailableManaColors(ai, (List<Card>)null)).getColor());
-            
+            boolean canPayWithAvailableColors = cost.canBePaidWithAvailable(availableColors);
+
             if (cost.getCMC() == 0 && cost.countX() == 0) {
                 // no mana cost, no need to activate this SA then (additional mana not needed)
                 continue;
@@ -260,7 +260,7 @@ public class ManaAi extends SpellAbilityAi {
 
         PhaseHandler ph = ai.getGame().getPhaseHandler();
         // TODO if threatened use right away
-        return ph.is(PhaseType.END_OF_TURN) && (ph.getNextTurn() == ai || ComputerUtilCard.willUntap(ai, sa.getHostCard()))
+        return ph.is(PhaseType.END_OF_TURN) && (ph.isPlayerNextTurn(ai) || ComputerUtilCard.willUntap(ai, sa.getHostCard()))
                 && (activateForTrigger || canRampPool(ai, sa.getHostCard()));   
     }
 
@@ -270,11 +270,11 @@ public class ManaAi extends SpellAbilityAi {
         if (mp.isEmpty()) {
             // TODO use color from ability
             test = new Mana((byte) ManaAtom.COLORLESS, source, null, ai);
-            mp.addMana(test, false);
+            mp.addManaNoEvent(test);
         }
         boolean lose = mp.willManaBeLostAtEndOfPhase();
         if (test != null) {
-            mp.removeMana(test, false);
+            mp.removeManaNoEvent(test);
         }
         return !lose;
     }

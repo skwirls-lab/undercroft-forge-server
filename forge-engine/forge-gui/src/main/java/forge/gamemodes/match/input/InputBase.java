@@ -25,7 +25,7 @@ import forge.game.player.Player;
 import forge.game.player.PlayerView;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.SpellAbilityView;
-import forge.gui.GuiBase;
+import forge.gamemodes.match.Selection;
 import forge.localinstance.properties.ForgePreferences;
 import forge.model.FModel;
 import forge.player.PlayerControllerHuman;
@@ -43,7 +43,6 @@ import java.util.List;
  * @version $Id: InputBase.java 24769 2014-02-09 13:56:04Z Hellfish $
  */
 public abstract class InputBase implements java.io.Serializable, Input {
-    /** Constant <code>serialVersionUID=-2531867688249685076L</code>. */
     private static final long serialVersionUID = -2531867688249685076L;
 
     private final PlayerControllerHuman controller;
@@ -78,10 +77,37 @@ public abstract class InputBase implements java.io.Serializable, Input {
     public final void showMessageInitial() {
         finished = false;
         controller.cancelAwaitNextInput();
+        if (isBusy()) {
+            return;
+        }
         showMessage();
+        // showMessage can finish the input, which has already reset the selection
+        if (!isFinished()) {
+            showSelection();
+        }
     }
 
     protected abstract void showMessage();
+
+    /** Whether an action this input started is still running. That action shows the input again when it ends. */
+    protected boolean isBusy() {
+        return false;
+    }
+
+    /** What this prompt marks. */
+    protected Selection getSelection() {
+        return Selection.NONE;
+    }
+
+    /** The cards this prompt highlights as worth acting on. */
+    protected List<CardView> getActionable() {
+        return List.of();
+    }
+
+    /** Sends this prompt's marks, with the targets kept marked while a spell's cost is paid. */
+    protected final void showSelection() {
+        controller.getGui().setSelection(getSelection().withChosen(controller.getKeptMarks()).withActionable(getActionable()));
+    }
 
     @Override
     public final void selectPlayer(final Player player, final ITriggerEvent triggerEvent) {
@@ -119,21 +145,14 @@ public abstract class InputBase implements java.io.Serializable, Input {
     protected void onCancel() {}
     protected void onOk() {}
 
-    // to remove need for CMatchUI dependence
     protected final void showMessage(final String message) {
-        controller.getGui().showPromptMessage(getOwner(), message);
+        showMessage(message, (CardView) null);
     }
     protected final void showMessage(final String message, final SpellAbilityView sav) {
-        if (GuiBase.isNetworkplay(controller.getGui())) //todo additional check to pass this
-            controller.getGui().showPromptMessage(getOwner(), message);
-        else
-            controller.getGui().showCardPromptMessage(getOwner(), message, sav.getHostCard());
+        showMessage(message, sav.getHostCard());
     }
     protected final void showMessage(final String message, final CardView card) {
-        if (GuiBase.isNetworkplay(controller.getGui())) //todo additional check to pass this
-            controller.getGui().showPromptMessage(getOwner(), message);
-        else
-            controller.getGui().showCardPromptMessage(getOwner(), message, card);
+        controller.getGui().showPromptMessage(getOwner(), message, card);
     }
 
     protected String getTurnPhasePriorityMessage(final Game game) {

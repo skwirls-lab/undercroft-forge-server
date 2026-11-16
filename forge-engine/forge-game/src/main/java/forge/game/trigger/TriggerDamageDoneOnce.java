@@ -44,11 +44,17 @@ public class TriggerDamageDoneOnce extends Trigger {
             if (!Expressions.compare(damageAmount, operator, operand)) return false;
         }
 
+        if (hasParam("FirstTime")) {
+            if (!(boolean) runParams.get(AbilityKey.FirstTime)) {
+                return false;
+            }
+        }
+
         return true;
     }
 
     @Override
-    public void setTriggeringObjects(SpellAbility sa, Map<AbilityKey, Object> runParams) {
+    public void setTriggeringObjects(Map<AbilityKey, Object> objects, Map<AbilityKey, Object> runParams) {
         @SuppressWarnings("unchecked")
         final Map<Card, Integer> damageMap = (Map<Card, Integer>) runParams.get(AbilityKey.DamageMap);
 
@@ -56,13 +62,13 @@ public class TriggerDamageDoneOnce extends Trigger {
         if (target instanceof Card) {
             target = CardCopyService.getLKICopy((Card)runParams.get(AbilityKey.DamageTarget));
         }
-        sa.setTriggeringObject(AbilityKey.Target, target);
-        sa.setTriggeringObject(AbilityKey.Sources, getDamageSources(damageMap));
+        objects.put(AbilityKey.Target, target);
+        objects.put(AbilityKey.Sources, getDamageSources(damageMap));
         for (final Map.Entry<Card, Integer> entry : damageMap.entrySet()) {
-            sa.setTriggeringObject(AbilityKey.AttackingPlayer, entry.getKey().getController());
+            objects.put(AbilityKey.AttackingPlayer, entry.getKey().getController());
             break;
         }
-        sa.setTriggeringObject(AbilityKey.DamageAmount, getDamageAmount(damageMap));
+        objects.put(AbilityKey.DamageAmount, getDamageAmount(damageMap));
     }
 
     @Override

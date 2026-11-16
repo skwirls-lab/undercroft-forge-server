@@ -6,9 +6,11 @@ import forge.game.card.*;
 import forge.game.replacement.ReplacementType;
 import org.apache.commons.lang3.tuple.Pair;
 
+import com.google.common.collect.HashMultiset;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.common.collect.Multiset;
 
 import forge.game.Game;
 import forge.game.GameEntity;
@@ -19,7 +21,6 @@ import forge.game.player.PlayerController;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
-import forge.util.Aggregates;
 import forge.util.Lang;
 import forge.util.Localizer;
 
@@ -80,13 +81,6 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
             cntToRemove = AbilityUtils.calculateAmount(source, num, sa);
         }
 
-        if (sa.hasParam("Optional")) {
-            String ctrs = cntToRemove > 1 ? Localizer.getInstance().getMessage("lblCounters") : num.equals("All") ? Localizer.getInstance().getMessage("lblAllCounters") : Localizer.getInstance().getMessage("lblACounters");
-            if (!pc.confirmAction(sa, null, Localizer.getInstance().getMessage("lblRemove") + " " + ctrs + "?", null)) {
-                return;
-            }
-        }
-
         CounterType counterType = null;
 
         if (!type.equals("Any") && !type.equals("All")) {
@@ -112,6 +106,15 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
         }
         if (sa.isReplacementAbility() && sa.getReplacementEffect().getMode() == ReplacementType.Moved) {
             srcCards = new CardCollection(srcCards).filter(c -> !c.isInPlay() || sa.getLastStateBattlefield().contains(c));
+        }
+
+        if (sa.hasParam("Optional")) {
+            String ctrs = cntToRemove > 1 ? Localizer.getInstance().getMessage("lblCounters") : num.equals("All") ? Localizer.getInstance().getMessage("lblAllCounters") : Localizer.getInstance().getMessage("lblACounters");
+            final Card cardToShow = srcCards.size() == 1 ? srcCards.get(0) : null;
+            if (!pc.confirmAction(sa, null, Localizer.getInstance().getMessage("lblRemove") + " " + ctrs + "?",
+                    cardToShow, null)) {
+                return;
+            }
         }
 
         if (sa.hasParam("Choices")) {
@@ -140,8 +143,8 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
                     continue;
                 }
                 if (type.equals("All")) {
-                    for (Map.Entry<CounterType, Integer> e : Lists.newArrayList(tgtPlayer.getCounters().entrySet())) {
-                        totalRemoved += tgtPlayer.subtractCounter(e.getKey(), e.getValue(), activator);
+                    for (Multiset.Entry<CounterType> e : Lists.newArrayList(tgtPlayer.getCounters().entrySet())) {
+                        totalRemoved += tgtPlayer.subtractCounter(e.getElement(), e.getCount(), activator);
                     }
                 } else {
                     if (num.equals("All")) {
@@ -167,8 +170,8 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
 
             final Zone zone = game.getZoneOf(gameCard);
             if (type.equals("All")) {
-                for (Map.Entry<CounterType, Integer> e : Lists.newArrayList(gameCard.getCounters().entrySet())) {
-                    totalRemoved += gameCard.subtractCounter(e.getKey(), e.getValue(), activator);
+                for (Multiset.Entry<CounterType> e : Lists.newArrayList(gameCard.getCounters().entrySet())) {
+                    totalRemoved += gameCard.subtractCounter(e.getElement(), e.getCount(), activator);
                 }
                 game.updateLastStateForCard(gameCard);
             } else if (type.equals("Any")) {
@@ -232,8 +235,8 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
         final Game game = source.getGame();
         final Player activator = sa.getActivatingPlayer();
         final PlayerController pc = activator.getController();
-        final Map<CounterType, Integer> tgtCounters = Maps.newHashMap(entity.getCounters());
-        for (CounterType ct : ImmutableList.copyOf(tgtCounters.keySet())) {
+        final Multiset<CounterType> tgtCounters = HashMultiset.create(entity.getCounters());
+        for (CounterType ct : ImmutableList.copyOf(tgtCounters.elementSet())) {
             if (!entity.canRemoveCounters(ct)) {
                 tgtCounters.remove(ct);
             }
@@ -244,12 +247,12 @@ public class CountersRemoveEffect extends SpellAbilityEffect {
             params.put("Target", entity);
 
             String prompt = Localizer.getInstance().getMessage("lblSelectCountersTypeToRemove");
-            CounterType chosenType = pc.chooseCounterType(ImmutableList.copyOf(tgtCounters.keySet()), sa, prompt, params);
+            CounterType chosenType = pc.chooseCounterType(ImmutableList.copyOf(tgtCounters.elementSet()), sa, prompt, params);
 
-            int max = Math.min(cntToRemove, tgtCounters.get(chosenType));
+            int max = Math.min(cntToRemove, tgtCounters.count(chosenType));
             // remove selection so player can't cheat additional trigger by choosing the same type multiple times
             tgtCounters.remove(chosenType);
-            int remaining = Aggregates.sum(tgtCounters.values());
+            int remaining = tgtCounters.size();
             // player must choose enough so he can still reach the amount with other types
             int min = upTo ? 0 : Math.max(1, max - remaining);
             prompt = Localizer.getInstance().getMessage("lblSelectRemoveCountersNumberOfTarget", chosenType.getName());

@@ -4,7 +4,7 @@ import java.util.Map;
 
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
-import forge.game.card.CardDamageMap;
+import forge.game.card.CardDamageTable;
 import forge.game.spellability.SpellAbility;
 import forge.util.Localizer;
 
@@ -21,18 +21,18 @@ public class TriggerDamageAll extends Trigger {
                 return false;
             }
         }
-        final CardDamageMap table = (CardDamageMap) runParams.get(AbilityKey.DamageMap);
+        final CardDamageTable table = (CardDamageTable) runParams.get(AbilityKey.DamageMap);
         return !table.filteredMap(getParam("ValidSource"), getParam("ValidTarget"), getHostCard(), this).isEmpty();
     }
 
     @Override
-    public void setTriggeringObjects(SpellAbility sa, Map<AbilityKey, Object> runParams) {
-        CardDamageMap table = (CardDamageMap) runParams.get(AbilityKey.DamageMap);
+    public void setTriggeringObjects(Map<AbilityKey, Object> objects, Map<AbilityKey, Object> runParams) {
+        CardDamageTable table = (CardDamageTable) runParams.get(AbilityKey.DamageMap);
         table = table.filteredMap(getParam("ValidSource"), getParam("ValidTarget"), getHostCard(), this);
 
-        sa.setTriggeringObject(AbilityKey.DamageAmount, table.totalAmount());
-        sa.setTriggeringObject(AbilityKey.Sources, table.rowKeySet());
-        sa.setTriggeringObject(AbilityKey.Targets, table.columnKeySet());
+        objects.put(AbilityKey.DamageAmount, table.totalAmount());
+        objects.put(AbilityKey.Sources, table.rowKeySet());
+        objects.put(AbilityKey.Targets, table.columnKeySet());
     }
 
     @Override

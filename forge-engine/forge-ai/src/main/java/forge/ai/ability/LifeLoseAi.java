@@ -9,6 +9,7 @@ import forge.game.ability.AbilityUtils;
 import forge.game.card.Card;
 import forge.game.cost.Cost;
 import forge.game.cost.CostSacrifice;
+import forge.game.keyword.Keyword;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
@@ -36,11 +37,8 @@ public class LifeLoseAi extends SpellAbilityAi {
             SpellAbility root = sa.getRootAbility();
             if (root.getXManaCostPaid() != null) {
                 amount = root.getXManaCostPaid();
-            } else if (root.getPayCosts() != null && root.getPayCosts().hasXInAnyCostPart()) {
-                // Set PayX here to maximum value.
-                final int xPay = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
-                root.setXManaCostPaid(xPay);
-                amount = xPay;
+            } else if (root.getPayCosts().hasXInAnyCostPart()) {
+                amount = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
             }
         } else {
             amount = AbilityUtils.calculateAmount(source, amountStr, sa);
@@ -69,8 +67,7 @@ public class LifeLoseAi extends SpellAbilityAi {
         int amount = 0;
 
         if (amountStr.equals("X") && sa.getSVar(amountStr).equals("Count$xPaid")) {
-            // Set PayX here to maximum value.
-            amount = ComputerUtilCost.getMaxXValue(sa, payer, sa.isTrigger());
+            amount = ComputerUtilCost.setMaxXValue(sa, payer, sa.isTrigger());
         } else {
             amount = AbilityUtils.calculateAmount(source, amountStr, sa);
         }
@@ -104,9 +101,7 @@ public class LifeLoseAi extends SpellAbilityAi {
         }
 
         if (amountStr.equals("X") && sa.getSVar(amountStr).equals("Count$xPaid")) {
-            // Set PayX here to maximum value.
-            amount = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
-            sa.setXManaCostPaid(amount);
+            amount = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
         } else {
             amount = AbilityUtils.calculateAmount(source, amountStr, sa);
         }
@@ -121,8 +116,11 @@ public class LifeLoseAi extends SpellAbilityAi {
 
         final PlayerCollection tgtPlayers = getPlayers(ai, sa);
          // TODO: check against the amount we could obtain when multiple activations are possible
+        // a storm spell is copied once for every spell cast before it this turn, and every copy takes life
+        final int totalAmount = source.hasKeyword(Keyword.STORM) && sa.isSpell()
+                ? amount * (ai.getGame().getStack().getSpellsCastThisTurn().size() + 1) : amount;
         PlayerCollection filteredPlayer = tgtPlayers
-                .filter(PlayerPredicates.isOpponentOf(ai).and(PlayerPredicates.lifeLessOrEqualTo(amount)));
+                .filter(PlayerPredicates.isOpponentOf(ai).and(PlayerPredicates.lifeLessOrEqualTo(totalAmount)));
         // killing opponents asap
         if (!filteredPlayer.isEmpty()) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -173,10 +171,7 @@ public class LifeLoseAi extends SpellAbilityAi {
         final String amountStr = sa.getParam("LifeAmount");
         int amount;
         if (amountStr.equals("X") && sa.getSVar(amountStr).equals("Count$xPaid")) {
-            // Set PayX here to maximum value.
-            final int xPay = ComputerUtilCost.getMaxXValue(sa, ai, true);
-            sa.setXManaCostPaid(xPay);
-            amount = xPay;
+            amount = ComputerUtilCost.setMaxXValue(sa, ai, true);
         } else {
             amount = AbilityUtils.calculateAmount(source, amountStr, sa);
         }

@@ -17,7 +17,6 @@
  */
 package forge.game.trigger;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import forge.game.ability.AbilityKey;
 import forge.game.card.Card;
@@ -94,11 +93,11 @@ public class TriggerAbilityTriggered extends Trigger {
 
     /** {@inheritDoc} */
     @Override
-    public final void setTriggeringObjects(final SpellAbility sa, Map<AbilityKey, Object> runParams) {
+    public final void setTriggeringObjects(final Map<AbilityKey, Object> objects, Map<AbilityKey, Object> runParams) {
         final SpellAbility triggeredSA = (SpellAbility) runParams.get(AbilityKey.SpellAbility);
-        sa.setTriggeringObject(AbilityKey.Source, triggeredSA.getHostCard());
-        sa.setTriggeringObjectsFrom(
-                runParams,
+        objects.put(AbilityKey.Source, triggeredSA.getHostCard());
+        AbilityKey.copyKeys(
+                runParams, objects,
                 AbilityKey.SpellAbility,
                 AbilityKey.Cause);
     }
@@ -115,13 +114,13 @@ public class TriggerAbilityTriggered extends Trigger {
         newRunParams.put(AbilityKey.Mode, regtrig.getMode().toString());
         if (regtrig.getMode() == TriggerType.ChangesZone) {
             newRunParams.put(AbilityKey.Destination, runParams.getOrDefault(AbilityKey.Destination, ""));
-            newRunParams.put(AbilityKey.Cause, ImmutableList.of(runParams.get(AbilityKey.Card)));
+            newRunParams.put(AbilityKey.Cause, List.of(runParams.get(AbilityKey.Card)));
         } else if (regtrig.getMode() == TriggerType.ChangesZoneAll) {
             final CardZoneTable table = (CardZoneTable) runParams.get(AbilityKey.Cards);
             newRunParams.put(AbilityKey.Destination, StringUtils.join(table.columnKeySet(), ","));
             newRunParams.put(AbilityKey.Cause, table.allCards());
         } else if (regtrig.getMode() == TriggerType.Attacks) {
-            newRunParams.put(AbilityKey.Cause, ImmutableList.of(runParams.get(AbilityKey.Attacker)));
+            newRunParams.put(AbilityKey.Cause, List.of(runParams.get(AbilityKey.Attacker)));
         } else if (regtrig.getMode() == TriggerType.AttackersDeclared || regtrig.getMode() == TriggerType.AttackersDeclaredOneTarget) {
             CardCollection attackers = (CardCollection) runParams.get(AbilityKey.Attackers);
             if (regtrig.hasParam("ValidAttackers")) {

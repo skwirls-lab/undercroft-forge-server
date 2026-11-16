@@ -11,14 +11,14 @@ import forge.game.card.CardView;
 import forge.game.player.Player;
 import forge.game.player.PlayerView;
 import forge.game.spellability.SpellAbility;
+import forge.game.spellability.SpellAbilityStackInstance;
 import forge.game.spellability.TargetRestrictions;
-import forge.gui.FThreads;
+import forge.gamemodes.match.Selection;
 import forge.localinstance.properties.ForgeConstants;
 import forge.localinstance.properties.ForgePreferences;
 import forge.model.FModel;
 import forge.player.PlayerControllerHuman;
-import forge.player.PlayerZoneUpdate;
-import forge.player.PlayerZoneUpdates;
+import forge.trackable.TrackableObject;
 import forge.util.*;
 
 import java.util.ArrayList;
@@ -35,6 +35,8 @@ public final class InputSelectTargets extends InputSyncronizedBase {
     private final TargetRestrictions tgt;
     private final SpellAbility sa;
     private final Integer numTargets;
+    private final int initialMin;
+    private final int initialMax;
     private final Collection<Integer> divisionValues;
     private Card lastTarget = null;
     private boolean bCancel = false;
@@ -63,19 +65,35 @@ public final class InputSelectTargets extends InputSyncronizedBase {
             lastTarget = card;
         }
 
-        controller.getGui().setSelectables(CardView.getCollection(choices));
-        final PlayerZoneUpdates zonesToUpdate = new PlayerZoneUpdates();
-        for (final Card c : choices) {
-            zonesToUpdate.add(new PlayerZoneUpdate(c.getZone().getPlayer().getView(), c.getZone().getZoneType()));
-        }
-        FThreads.invokeInEdtNowOrLater(() -> {
-            for (final GameEntity c : targets) {
-                if (c instanceof Card) {
-                    controller.getGui().setUsedToPay(CardView.get((Card) c), true);
-                }
+        initialMin = numTargets != null ? numTargets : sa.getMinTargets();
+        initialMax = numTargets != null ? numTargets : sa.getMaxTargets();
+    }
+
+    /** The valid cards, the players that can still be picked, and what this spell's steps have chosen so far. */
+    @Override
+    protected Selection getSelection() {
+        final List<Player> valid = new ArrayList<>();
+        if (!mustTargetFiltered) { // same checks as onPlayerSelected
+            for (final Player p : getController().getGame().getPlayers()) {
+                if (targets.contains(p) || p.hasLost() || !sa.canTarget(p)) { continue; }
+                if (sa.isSpell() && sa.getHostCard().isAura() && !p.canBeAttached(sa.getHostCard(), sa)) { continue; }
+                if (filter != null && !filter.test(p)) { continue; }
+                valid.add(p);
             }
-            controller.getGui().updateZones(zonesToUpdate);
-        });
+        }
+        final List<TrackableObject> offered = new ArrayList<>(PlayerView.getCollection(valid));
+        final List<TrackableObject> chosen = TargetingProgress.chosenTargets(sa);
+        // spells on the stack that are valid Card targets: make their stack entries tappable
+        for (final SpellAbilityStackInstance si : getController().getGame().getStack()) {
+            final SpellAbility onStack = si.getSpellAbility();
+            final Card host = onStack.getHostCard();
+            if (!onStack.isSpell() || host == null || !choices.contains(host)) { continue; }
+            offered.add(si.getView());
+            if (targets.contains(host)) {
+                chosen.add(si.getView());
+            }
+        }
+        return new Selection(new ArrayList<>(CardView.getCollection(choices)), initialMin, initialMax, offered, chosen, List.of());
     }
 
     @Override
@@ -308,7 +326,21 @@ public final class InputSelectTargets extends InputSyncronizedBase {
             }
         }
         addTarget(card);
+        if (otherCardsToSelect != null) {
+            for (final Card other : otherCardsToSelect) {
+                if (isFinished() || hasAllTargets()) break;
+                onCardSelected(other, null, triggerEvent);
+            }
+        }
         return true;
+    }
+
+    @Override
+    public boolean selectAbility(final SpellAbility ab) {
+        final Card host = ab == null ? null : ab.getHostCard();
+        if (isFinished() || ab == null || !ab.isSpell()) { return false; }
+        if (host == null || !choices.contains(host)) { return false; }
+        return onCardSelected(host, null, null);
     }
 
     @Override
@@ -357,6 +389,18 @@ public final class InputSelectTargets extends InputSyncronizedBase {
         addTarget(player);
     }
 
+    public boolean selectPlayerForMacro(final Player player, final ITriggerEvent triggerEvent) {
+        final int oldTargetCount = targets.size();
+        onPlayerSelected(player, triggerEvent);
+        return targets.contains(player) && targets.size() > oldTargetCount;
+    }
+
+    public boolean selectCardForMacro(final Card card, final ITriggerEvent triggerEvent) {
+        final int oldTargetCount = targets.size();
+        onCardSelected(card, null, triggerEvent);
+        return targets.contains(card) && targets.size() > oldTargetCount;
+    }
+
     protected Boolean onDividedAsYouChoose(GameObject go) {
         String apiBasedMessage = "Distribute how much to ";
         if (sa.getApi() == ApiType.DealDamage) {
@@ -382,14 +426,11 @@ public final class InputSelectTargets extends InputSyncronizedBase {
 
     private void addTarget(final GameEntity ge) {
         sa.getTargets().add(ge);
-        if (ge instanceof Card) {
-            getController().getGui().setUsedToPay(CardView.get((Card) ge), true);
-            lastTarget = (Card) ge;
-        }
-        else if (ge instanceof Player) {
-            getController().getGui().setHighlighted(PlayerView.get((Player) ge), true);
-        }
         targets.add(ge);
+        if (ge instanceof Card c) {
+            lastTarget = c;
+        }
+        showSelection();
 
         if (hasAllTargets()) {
             bOk = true;
@@ -410,41 +451,22 @@ public final class InputSelectTargets extends InputSyncronizedBase {
         }
         targets.remove(ge);
         sa.getTargets().remove(ge);
-        if (ge instanceof Card c) {
-            getController().getGui().setUsedToPay(CardView.get(c), false);
+        if (ge instanceof Card) {
             // try to get last selected card
             lastTarget = Iterables.getLast(IterableUtil.filter(targets, Card.class), null);
         }
-        else if (ge instanceof Player p) {
-            getController().getGui().setHighlighted(PlayerView.get(p), false);
-        }
+        showSelection();
 
         this.showMessage();
     }
 
     private void done() {
-        for (final GameEntity c : targets) {
-            //getController().macros().addRememberedAction(new TargetEntityAction(c.getView()));
-            if (c instanceof Card) {
-                getController().getGui().setUsedToPay(CardView.get((Card) c), false);
-            }
-            else if (c instanceof Player) {
-                getController().getGui().setHighlighted(PlayerView.get((Player) c), false);
-            }
-        }
-
         this.stop();
     }
 
     private boolean hasAllTargets() {
         return sa.isMaxTargetChosen() || (numTargets != null && numTargets == targets.size()) || (divisionValues != null && sa.getStillToDivide() <= 0)
             || (divisionValues == null && sa.isDividedAsYouChoose() && targets.size() == sa.getStillToDivide());
-    }
-
-    @Override
-    protected void onStop() {
-        getController().getGui().clearSelectables();
-        super.onStop();
     }
 
 }

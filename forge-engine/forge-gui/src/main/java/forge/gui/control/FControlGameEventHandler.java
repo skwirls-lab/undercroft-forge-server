@@ -4,12 +4,14 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.eventbus.Subscribe;
+import forge.game.GameView;
 import forge.game.card.CardView;
 import forge.game.event.*;
 import forge.game.player.PlayerView;
 import forge.game.zone.ZoneType;
 import forge.gui.GuiBase;
 import forge.gui.interfaces.IGuiGame;
+import forge.localinstance.properties.ForgeConstants;
 import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
 import forge.player.PlayerControllerHuman;
@@ -17,6 +19,7 @@ import forge.player.PlayerZoneUpdate;
 import forge.player.PlayerZoneUpdates;
 import forge.sound.SoundSystem;
 import forge.util.Lang;
+import forge.util.Localizer;
 
 import java.util.*;
 import java.util.Map.Entry;
@@ -33,7 +36,7 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     private final Map<PlayerView, Object> playersWithValidTargets = Maps.newHashMap();
 
     private boolean processEventsQueued, needPhaseUpdate, needCombatUpdate, needStackUpdate, needPlayerControlUpdate, refreshFieldUpdate, showExileUpdate;
-    private boolean gameOver, gameFinished;
+    private boolean gameOver, gameFinished, undoRestored;
     private boolean needSaveState = false;
     private PlayerView turnUpdate, activatingPlayer;
 
@@ -51,6 +54,10 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
         @Override
         public void run() {
             processEventsQueued = false;
+            if (undoRestored) { // before any refresh below, so rows rebuild from a clean slate
+                undoRestored = false;
+                matchController.onSnapshotRestored();
+            }
 
             synchronized (cardsUpdate) {
                 if (!cardsUpdate.isEmpty()) {
@@ -120,21 +127,24 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
             }
             if (showExileUpdate) {
                 showExileUpdate = false;
-                matchController.openZones(activatingPlayer, Collections.singleton(ZoneType.Exile), playersWithValidTargets, false);
+                matchController.openZones(activatingPlayer, Collections.singleton(ZoneType.Exile), playersWithValidTargets);
                 activatingPlayer = null;
                 playersWithValidTargets.clear();
             }
             if (gameOver) {
                 gameOver = false;
                 if (humanController != null) {
-                    humanController.getInputQueue().onGameOver(true); // this will unlock any game threads waiting for inputs to complete
+                    humanController.macros().cancelCurrentMacro();
+                    // this will unlock any game threads waiting for inputs to complete
+                    humanController.getInputQueue().onGameOver(true);
                 }
             }
             if (gameFinished) {
                 gameFinished = false;
+                matchController.cancelAwaitNextInput(); //ensure "Waiting for opponent..." doesn't appear behind WinLose
                 if (humanController != null) {
+                    humanController.macros().cancelCurrentMacro();
                     final PlayerView localPlayer = humanController.getLocalPlayerView();
-                    humanController.cancelAwaitNextInput(); //ensure "Waiting for opponent..." doesn't appear behind WinLo
                     matchController.showPromptMessage(localPlayer, ""); //clear prompt behind WinLose overlay
                     matchController.updateButtons(localPlayer, "", "", false, false, false);
                     humanController.updateAchievements();
@@ -187,14 +197,36 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     }
 
     @Override
+    public Void visit(final GameEventFlipCoin ev) {
+        if (humanController == null || !FModel.getPreferences().getPrefBoolean(FPref.UI_COIN_DICE_ANIMATION)) {
+            return null;
+        }
+        final PlayerView me = humanController.getLocalPlayerView();
+        final boolean heads;
+        final String msg;
+        if (ev.startingToss()) {
+            if (me == null) { return null; }   // spectators
+            heads = me.equals(ev.flipper());
+            msg = Localizer.getInstance().getMessage(
+                    heads ? "lblYouHaveWonTheCoinToss" : "lblYouLostTheCoinToss", me.getName());
+        } else {
+            heads = ev.heads();
+            msg = Localizer.getInstance().getMessage("lblPlayerFlippedCoin",
+                    ev.flipper().getName(),
+                    Localizer.getInstance().getMessage(heads ? "lblHeads" : "lblTails"));
+        }
+        matchController.showCoinFlip(heads, msg, false);   // always auto-close after the coin lands
+        return null;
+    }
+
+    @Override
     public Void visit(final GameEventTurnPhase ev) {
         needPhaseUpdate = true;
         needSaveState = !"dev".equals(ev.phaseDesc());
 
         PlayerView ap = ev.playerTurn();
-        boolean refreshField = ap.getCards(ZoneType.Battlefield) != null &&
-                (ap.getCards(ZoneType.Battlefield).anyMatch(CardView::isToken)
-                || (FModel.getPreferences().getPrefBoolean(FPref.UI_STACK_CREATURES) && ap.getCards(ZoneType.Battlefield).anyMatch(c -> c.getCurrentState().isCreature())));
+        boolean refreshField = ap.getCards(ZoneType.Battlefield).anyMatch(CardView::isToken)
+                || (!"default".equals(FModel.getPreferences().getPref(FPref.UI_GROUP_PERMANENTS)) && ap.getCards(ZoneType.Battlefield).anyMatch(c -> c.getCurrentState().isCreature()));
         if (refreshField) {
             updateZone(ap, ZoneType.Battlefield);
         }
@@ -256,10 +288,26 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     }
 
     @Override
+    public Void visit(final GameEventFlipOntoBattlefield ev) {
+        if (ev.finished()) {
+            matchController.endFlipOntoBattlefield(ev.flipped());
+            return null;
+        }
+        final List<CardView> battlefield = new ArrayList<>();
+        for (PlayerView pv : matchController.getGameView().getPlayers()) {
+            for (CardView cv : pv.getCards(ZoneType.Battlefield)) { battlefield.add(cv); }
+        }
+        matchController.showFlipOntoBattlefield(ev.flipped(), ev.target(), ev.hit(), battlefield, ev.timesFlipped());
+        return null;
+    }
+
+    @Override
     public Void visit(final GameEventSpellAbilityCast event) {
         needStackUpdate = true;
-        if(GuiBase.getInterface().isLibgdxPort()) {
-            return processEvent(); //mobile port don't have notify stack addition like the desktop
+        if (matchController.isLibgdxPort() ||
+                ForgeConstants.STACK_EFFECT_NOTIFICATION_NEVER.equals(FModel.getPreferences().getPref(FPref.UI_STACK_EFFECT_NOTIFICATION_POLICY))) {
+            // mobile port don't have notify stack addition like the desktop
+            return processEvent();
         } else {
             processEvent();
 
@@ -267,6 +315,32 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
             GuiBase.getInterface().invokeInEdtLater(notifyStackAddition);
         }
         return null;
+    }
+
+    /** Undo rewinds the game in place without emitting the individual events the GUI normally reacts to; resync everything. */
+    @Override
+    public Void visit(final GameEventSnapshotRestored event) {
+        if (event.start()) { return null; }
+        final GameView gv = matchController.getGameView();
+        if (gv != null) {
+            for (final PlayerView p : gv.getPlayers()) {
+                synchronized (livesUpdate) { livesUpdate.add(p); }
+                synchronized (shardsUpdate) { shardsUpdate.add(p); }
+                synchronized (manaPoolUpdate) { manaPoolUpdate.add(p); }
+                for (final ZoneType z : ZoneType.values()) {
+                    synchronized (zonesUpdate) { zonesUpdate.add(new PlayerZoneUpdate(p, z)); }
+                }
+            }
+        }
+        if (gv != null && gv.getPlayerTurn() != null) { turnUpdate = gv.getPlayerTurn(); }
+        undoRestored = true;
+        needPhaseUpdate = true;
+        needSaveState = false;
+        needCombatUpdate = true;
+        needStackUpdate = true;
+        needPlayerControlUpdate = true;
+        refreshFieldUpdate = true;
+        return processEvent();
     }
 
     @Override
@@ -278,8 +352,8 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     @Override
     public Void visit(final GameEventSpellRemovedFromStack event) {
         needStackUpdate = true;
-        if(GuiBase.getInterface().isLibgdxPort()) {
-            return processEvent(); //mobile port don't have notify stack addition like the desktop
+        if (matchController.isLibgdxPort() ||
+                ForgeConstants.STACK_EFFECT_NOTIFICATION_NEVER.equals(FModel.getPreferences().getPref(FPref.UI_STACK_EFFECT_NOTIFICATION_POLICY))) {
         } else {
             processEvent();
 
@@ -339,7 +413,6 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
     @Override
     public Void visit(final GameEventBlockersDeclared event) {
         final Set<CardView> cards = new HashSet<>();
-
         for (final Multimap<CardView, CardView> kv : event.blockers().values()) {
             cards.addAll(kv.values());
         }
@@ -368,13 +441,14 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventCombatUpdate event) {
-        if (!GuiBase.isNetworkplay(matchController))
+        if (!GuiBase.isNetPlay(matchController))
             return null; //not needed if single player only...
 
         final List<CardView> cards = new ArrayList<>();
         cards.addAll(event.attackers());
         cards.addAll(event.blockers());
 
+        needCombatUpdate = true;
         refreshFieldUpdate = true;
 
         processCards(cards, cardsRefreshDetails);
@@ -383,7 +457,7 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventCardChangeZone event) {
-        if (GuiBase.getInterface().isLibgdxPort()) {
+        if (matchController.isLibgdxPort()) {
             if (event.from() != null) {
                 updateZone(event.from().player(), event.from().zoneType());
             }
@@ -422,8 +496,7 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
         for (final PlayerView p : event.players()) {
             processPlayer(p, livesUpdate);
         }
-
-        return processCards(event.allCards(), cardsRefreshDetails);
+        return null;
     }
 
     public Void visit(final GameEventLandPlayed event) {
@@ -441,7 +514,7 @@ public class FControlGameEventHandler extends IGameEventVisitor.Base<Void> {
 
     @Override
     public Void visit(final GameEventShuffle event) {
-        if (GuiBase.getInterface().isLibgdxPort()) {
+        if (matchController.isLibgdxPort()) {
             return updateZone(event.player(), ZoneType.Library);
         } else {
             return processEvent();

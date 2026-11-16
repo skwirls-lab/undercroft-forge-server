@@ -2,9 +2,13 @@ package forge.ai.ability;
 
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Multiset;
+
 import forge.ai.*;
 import forge.card.CardType;
 import forge.card.MagicColor;
+import forge.card.mana.ManaCostShard;
 import forge.game.Game;
 import forge.game.GameEntity;
 import forge.game.GameObject;
@@ -15,10 +19,12 @@ import forge.game.card.*;
 import forge.game.combat.Combat;
 import forge.game.cost.*;
 import forge.game.keyword.Keyword;
+import forge.game.mana.ManaCostBeingPaid;
 import forge.game.phase.PhaseHandler;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
 import forge.game.player.PlayerActionConfirmMode;
+import forge.game.player.PlayerPredicates;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetRestrictions;
@@ -71,25 +77,8 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return true;
         }
 
-        if (sa.isCraft()) {
-            CardCollection payingCards = new CardCollection();
-            int needed = 0;
-            for (final CostPart part : cost.getCostParts()) {
-                if (part instanceof CostExile) {
-                    if (part.payCostFromSource()) {
-                        continue;
-                    }
-                    int amt = part.getAbilityAmount(sa);
-                    needed += amt;
-                    CardCollection toAdd = ComputerUtil.chooseExileFrom(payer, (CostExile) part, source, amt, sa, true);
-                    if (toAdd != null) {
-                        payingCards.addAll(toAdd);
-                    }
-                }
-            }
-            if (payingCards.size() < needed) {
-                return false;
-            }
+        if (sa.isCraft() && !ComputerUtilCost.checkExileFromGraveCost(cost, payer, sa)) {
+            return false;
         }
 
         return super.willPayCosts(payer, sa, cost, source);
@@ -247,15 +236,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
             }
             if (delta <= 0) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            } else {
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         } else if ("SaviorOfOllenbock".equals(aiLogic)) {
             if (SpecialCardAi.SaviorOfOllenbock.consider(aiPlayer, sa)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            } else {
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         if (sa.isHidden()) {
@@ -343,19 +330,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
         }
 
         String type = sa.getParam("ChangeType");
-        if (type != null && type.contains("X") && sa.getSVar("X").equals("Count$xPaid")) {
-            // Set PayX here to maximum value.
-            final int xPay = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
-            sa.setXManaCostPaid(xPay);
-            type = type.replace("X", Integer.toString(xPay));
+        if (type != null && type.contains("X")) {
+            ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
         }
 
         for (final Player p : pDefined) {
             CardCollectionView list = p.getCardsIn(origin);
 
             // remove cards that won't be seen if library can't be searched
-            if (!ai.canSearchLibraryWith(sa, p)) {
-                list = CardLists.filter(list, CardPredicates.inZone(ZoneType.Library).negate());
+            if (origin.contains(ZoneType.Library)) {
+                CardCollectionView searchable = ai.getSearchableLibrary(sa, p);
+                list = CardLists.filter(list, c -> !c.isInZone(ZoneType.Library) || (searchable != null && searchable.contains(c)));
             }
 
             if (type != null && p == ai) {
@@ -369,14 +354,17 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 });
             }
             // TODO: prevent ai searching its own library when Ob Nixilis, Unshackled is in play
-            if (origin != null && origin.size() == 1 && origin.get(0).isKnown()) {
+            else if (origin != null && origin.size() == 1 && origin.get(0).isKnown()) {
                 // FIXME: make this properly interact with several origin zones
                 list = CardLists.getValidCards(list, type, source.getController(), source, sa);
             }
 
-            if (!activateForCost && list.isEmpty()) {
+            if (!activateForCost &&
+                    (p == ai || !canIgnoreEmptyDefinedPlayers(ai, sa, origin, destination, pDefined)) &&
+                    (list.isEmpty() || ("Battlefield".equals(destination) && Iterables.any(list, card -> ComputerUtil.isETBprevented(card))))) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+
             if ("Atarka's Command".equals(sourceName)
                     && (list.size() < 2 || ai.getLandsPlayedThisTurn() < 1)) {
                 // be strict on playing lands off charms
@@ -386,17 +374,16 @@ public class ChangeZoneAi extends SpellAbilityAi {
             String num = sa.getParamOrDefault("ChangeNum", "1");
             if (num.contains("X")) {
                 if (sa.getSVar("X").equals("Count$xPaid")) {
-                    // Set PayX here to maximum value.
-                    int xPay = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
+                    int xPay = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
                     if (xPay == 0) {
                         return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
                     }
                     xPay = Math.min(xPay, list.size());
                     sa.setXManaCostPaid(xPay);
                 } else {
-                    // Figure out the X amount, bail if it's zero (nothing will change zone).
                     int xValue = AbilityUtils.calculateAmount(source, "X", sa);
                     if (xValue == 0) {
+                        // nothing will change zone
                         return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
                     }
                 }
@@ -444,6 +431,14 @@ public class ChangeZoneAi extends SpellAbilityAi {
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
+    private static boolean canIgnoreEmptyDefinedPlayers(final Player ai, final SpellAbility sa,
+            final List<ZoneType> origin, final String destination, final Iterable<Player> pDefined) {
+        return !sa.usesTargeting() && !sa.isCurse() && Iterables.contains(pDefined, ai)
+                && ("Hand".equals(destination) || "Battlefield".equals(destination))
+                && origin != null && origin.size() == 1
+                && (origin.get(0) == ZoneType.Library || origin.get(0) == ZoneType.Graveyard);
+    }
+
     /**
      * <p>
      * changeHiddenOriginPlayDrawbackAI.
@@ -484,9 +479,6 @@ public class ChangeZoneAi extends SpellAbilityAi {
      * @return a boolean.
      */
     private static AiAbilityDecision hiddenTriggerAI(final Player ai, final SpellAbility sa, final boolean mandatory) {
-        // Fetching should occur fairly often as it helps cast more spells, and
-        // have access to more mana
-
         List<ZoneType> origin = new ArrayList<>();
         if (sa.hasParam("Origin")) {
             origin = ZoneType.listValueOf(sa.getParam("Origin"));
@@ -494,15 +486,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
         // this works for hidden because the mana is paid first.
         final String type = sa.getParam("ChangeType");
-        if (!mandatory && sa.getPayCosts().hasXInAnyCostPart() && type != null && type.contains("X") && sa.getSVar("X").equals("Count$xPaid")) {
-            // Set PayX here to maximum value.
-            final int xPay = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
-            sa.setXManaCostPaid(xPay);
+        if (!mandatory && type != null && type.contains("X")) {
+            ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
         }
 
         Iterable<Player> pDefined;
         final TargetRestrictions tgt = sa.getTargetRestrictions();
-        if ((tgt != null) && tgt.canTgtPlayer()) {
+        if (tgt != null && tgt.canTgtPlayer()) {
             final Player opp = AiAttackController.choosePreferredDefenderPlayer(ai);
             if (sa.isCurse()) {
                 if (sa.canTarget(opp)) {
@@ -560,7 +550,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
      *            a List<Card> object.
      * @return a {@link forge.game.card.Card} object.
      */
-    private static Card basicManaFixing(final Player ai, final List<Card> list) { // Search for a Basic Land
+    private static Card basicManaFixing(final Player ai, List<Card> list) { // Search for a Basic Land
         final CardCollectionView combined = CardCollection.combine(ai.getCardsIn(ZoneType.Battlefield), ai.getCardsIn(ZoneType.Hand));
         final List<String> basics = new ArrayList<>();
 
@@ -571,30 +561,49 @@ public class ChangeZoneAi extends SpellAbilityAi {
             }
         }
 
+        // check if any SA we wanted to pay for had missing shards
+        Set<ManaCostBeingPaid> unpaid = AiCardMemory.getMemorySet(ai, AiCardMemory.MemorySetMana.UNPAID_COSTS);
+        Map<String, Integer> basicTypes = Maps.newHashMap();
+        if (unpaid != null) {
+            for (ManaCostBeingPaid cost : unpaid) {
+                for (ManaCostShard shard : cost.getUnpaidShards()) {
+                    for (MagicColor.Color col : shard.getColor()) {
+                        if (col == MagicColor.Color.COLORLESS) {
+                            continue;
+                        }
+                        basicTypes.merge(col.getBasicLandType(), 1, Integer::sum);
+                    }
+                }
+            }
+        }
+
         // Which basic land is least available from hand and play, that I still
         // have in my deck
         int minSize = Integer.MAX_VALUE;
         String minType = null;
 
         for (String b : basics) {
-            final int num = CardLists.getType(combined, b).size();
+            // average between well rounded mana base and shards that were missing
+            int num = CardLists.getType(combined, b).size();
+            if (!basicTypes.isEmpty()) {
+                num /= basicTypes.getOrDefault(b, 0) + 1;
+            }
             if (num < minSize) {
                 minType = b;
                 minSize = num;
             }
         }
 
-        List<Card> result = list;
         if (minType != null) {
-            result = CardLists.getType(list, minType);
+            list = CardLists.getType(list, minType);
         }
 
         // pick dual lands if available
-        if (result.stream().anyMatch(CardPredicates.NONBASIC_LANDS)) {
-            result = CardLists.filter(result, CardPredicates.NONBASIC_LANDS);
+        if (list.stream().anyMatch(CardPredicates.NONBASIC_LANDS)) {
+            list = CardLists.filter(list, CardPredicates.NONBASIC_LANDS);
         }
 
-        return result.get(0);
+        return list.get(0);
     }
 
     /**
@@ -629,6 +638,18 @@ public class ChangeZoneAi extends SpellAbilityAi {
                    return c;
             }
             return null;
+        }
+
+        if (ai.getTurn() <= 3) {
+            int manaSources = ComputerUtilMana.getAvailableManaEstimate(ai, false);
+            if (CardLists.count(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS_PRODUCING_MANA) > 0) {
+                manaSources++;
+            }
+            final int nearTermMana = manaSources + 1;
+            CardCollection nearTerm = CardLists.filter(list, c -> c.getCMC() <= nearTermMana);
+            if (!nearTerm.isEmpty()) {
+                return ComputerUtilCard.getBestCreatureAI(nearTerm);
+            }
         }
 
         // not urgent, get the largest creature possible
@@ -716,15 +737,9 @@ public class ChangeZoneAi extends SpellAbilityAi {
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
 
-                // predict whether something may put a ETBing creature below zero toughness
-                // (e.g. Reassembing Skeleton + Elesh Norn, Grand Cenobite)
                 for (final Card c : retrieval) {
-                    if (c.isCreature()) {
-                        final Card copy = CardCopyService.getLKICopy(c);
-                        ComputerUtilCard.applyStaticContPT(c.getGame(), copy, null);
-                        if (copy.getNetToughness() <= 0) {
-                            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
-                        }
+                    if (ComputerUtilCard.wouldDieToStaticPT(c)) {
+                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                     }
                 }
                 // predict Legendary cards already present
@@ -757,7 +772,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
         String aiLogic = sa.getParamOrDefault("AILogic", "");
 
         if (aiLogic.equals("SurvivalOfTheFittest")) {
-            return ph.getNextTurn().equals(ai) && ph.is(PhaseType.END_OF_TURN);
+            return ph.isPlayerNextTurn(ai) && ph.is(PhaseType.END_OF_TURN);
         } else if (aiLogic.equals("Main1") && ph.is(PhaseType.MAIN1, ai)) {
             return true;
         } else if (aiLogic.equals("BeforeCombat")) {
@@ -821,9 +836,8 @@ public class ChangeZoneAi extends SpellAbilityAi {
         if ("MimicVat".equals(sa.getParam("AILogic"))) {
             if (SpecialCardAi.MimicVat.considerExile(aiPlayer, sa)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            } else {
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         if (!sa.usesTargeting()) {
@@ -832,11 +846,9 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
         if (!isPreferredTarget(aiPlayer, sa, false, true)) {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
-        } else {
-            // if we are here, we have a target
-            // so we can play the ability
-            return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
+        // if we are here, we have a target
+        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
     }
 
     /**
@@ -879,11 +891,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
         sa.resetTargets();
         // X controls the minimum targets
         if ("X".equals(sa.getTargetRestrictions().getMinTargets()) && sa.getSVar("X").equals("Count$xPaid")) {
-            // Set PayX here to maximum value.
-            int xPay = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
-
-            // TODO need to set XManaCostPaid for targets, maybe doesn't need PayX anymore?
-            sa.setXManaCostPaid(xPay);
+            ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
         }
         CardCollection list = CardLists.getTargetableCards(game.getCardsIn(origin), sa);
 
@@ -989,7 +997,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
             // if it's blink or bounce, try to save my about to die stuff
             final boolean blink = (destination.equals(ZoneType.Exile) && (subApi == ApiType.DelayedTrigger
                     || "DelayedBlink".equals(sa.getParam("AILogic")) || (subApi == ApiType.ChangeZone && subAffected.equals("Remembered"))));
-            if ((destination.equals(ZoneType.Hand) || blink) && (sa.getMinTargets() <= 1)) {
+            if ((destination.equals(ZoneType.Hand) || blink) && sa.getMinTargets() <= 1) {
                 // save my about to die stuff
                 Card tobounce = canBouncePermanent(ai, sa, list);
                 if (tobounce != null) {
@@ -1019,14 +1027,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
                         // prefer post-combat unless targeting opponent's stuff or part of another ability
                         if (immediately || sa.getParent() != null || sa.isTrigger() || !opponentBlinkTargets.isEmpty() || !game.getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2)) {
                             while (!blinkTargets.isEmpty() && sa.canAddMoreTarget()) {
-                                Card choice = null;
+                                Card choice;
                                 // first prefer targeting opponents stuff
-                                if (!opponentBlinkTargets.isEmpty()) {
+                                if (opponentBlinkTargets.isEmpty()) {
+                                    choice = ComputerUtilCard.getBestAI(blinkTargets);
+                                } else {
                                     choice = ComputerUtilCard.getBestAI(opponentBlinkTargets);
                                     opponentBlinkTargets.remove(choice);
-                                }
-                                else {
-                                    choice = ComputerUtilCard.getBestAI(blinkTargets);
                                 }
                                 sa.getTargets().add(choice);
                                 blinkTargets.remove(choice);
@@ -1052,13 +1059,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
             }
 
         } else if (origin.contains(ZoneType.Graveyard)) {
+            if (destination.equals(ZoneType.Battlefield)) {
+                // don't return creatures that would die right away to static effects
+                // (e.g. Karmic Guide returning itself under Elesh Norn, Grand Cenobite would loop)
+                // TODO If AI thinks it's about to lose it could try to force a Draw this way
+                list = CardLists.filter(list, c -> !ComputerUtilCard.wouldDieToStaticPT(c));
+            }
             if (destination.equals(ZoneType.Exile) || destination.equals(ZoneType.Library)) {
                 // Don't use these abilities before main 2 if possible
                 if (!immediately && game.getPhaseHandler().getPhase().isBefore(PhaseType.MAIN2)
                         && !sa.hasParam("ActivationPhases") && !ComputerUtil.castSpellInMain1(ai, sa)) {
                     return false;
                 }
-                if (!immediately && (!game.getPhaseHandler().getNextTurn().equals(ai)
+                if (!immediately && (!game.getPhaseHandler().isPlayerNextTurn(ai)
                             || game.getPhaseHandler().getPhase().isBefore(PhaseType.END_OF_TURN))
                         && !sa.hasParam("PlayerTurn") && !isSorcerySpeed(sa, ai)
                         && !ComputerUtil.activateForCost(sa, ai)) {
@@ -1069,12 +1082,8 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 list = CardLists.filterControlledBy(list, ai);
             } else if (sa.hasParam("AttachedTo")) {
                 list = CardLists.filter(list, c -> {
-                    for (SpellAbility attach : c.getSpellAbilities()) {
-                        if ("Pump".equals(attach.getParam("AILogic"))) {
-                            return true; //only use good auras
-                        }
-                    }
-                    return false;
+                    // only use good auras
+                    return !c.isAura() || "Pump".equals(c.getSVar("AttachAILogic"));
                 });
             }
         }
@@ -1106,6 +1115,9 @@ public class ChangeZoneAi extends SpellAbilityAi {
                     }
                     return true;
                 });
+                if (origin.contains(ZoneType.Battlefield)) {
+                    list = ComputerUtil.filterCreaturesThatWillDieThisTurn(ai, list);
+                }
             }
 
             // See if maybe there's a special priority applicable for this, in case the opponent
@@ -1135,48 +1147,45 @@ public class ChangeZoneAi extends SpellAbilityAi {
         // the Unless cost (for example, Erratic Portal)
         list.removeAll(getSafeTargetsIfUnlessCostPaid(ai, sa, list));
 
-        if (!mandatory && list.size() < sa.getTargetRestrictions().getMinTargets(sa.getHostCard(), sa)) {
+        // X was sized against every legal target, but the list has since been narrowed to the ones
+        // the AI actually wants - usually just the opponents' permanents. Bring X down to match
+        // before the check below, otherwise controlling a single targetable permanent of its own is
+        // enough to make the AI refuse a spell it would happily cast for less.
+        if (!mandatory && "X".equals(sa.getTargetRestrictions().getMinTargets())
+                && "Count$xPaid".equals(sa.getSVar("X"))
+                && sa.getXManaCostPaid() != null && sa.getXManaCostPaid() > list.size()) {
+            sa.setXManaCostPaid(list.size());
+        }
+
+        if (!mandatory && list.size() < sa.getMinTargets()) {
             return false;
         }
 
-        // target loop
         while (sa.canAddMoreTarget()) {
-            // AI Targeting
             Card choice = null;
 
             if (!list.isEmpty()) {
                 if (destination.equals(ZoneType.Battlefield) || origin.contains(ZoneType.Battlefield)) {
-                    // filter by MustTarget requirement
                     CardCollection originalList = new CardCollection(list);
                     boolean mustTargetFiltered = StaticAbilityMustTarget.filterMustTargetCards(ai, list, sa);
 
-                    final Card mostExpensive = ComputerUtilCard.getMostExpensivePermanentAI(list);
-                    if (mostExpensive.isCreature()) {
-                        // if a creature is most expensive take the best one
-                        if (destination.equals(ZoneType.Exile)) {
-                            // If Exiling things, don't give bonus to Tokens
-                            choice = ComputerUtilCard.getBestCreatureAI(list);
-                        } else if (origin.contains(ZoneType.Graveyard)) {
-                            choice = mostExpensive;
-                            // Karmic Guide can chain another creature
-                            for (Card c : list) {
-                                if ("Karmic Guide".equals(c.getName())) {
-                                    choice = c;
-                                    break;
-                                }
+                    choice = origin.contains(ZoneType.Battlefield)
+                            ? ComputerUtilCard.getBestRemovalTargetAI(ai, list)
+                            : ComputerUtilCard.getMostExpensivePermanentAI(list);
+                    if (choice.isCreature() && origin.contains(ZoneType.Graveyard)) {
+                        // Karmic Guide can chain another creature
+                        for (Card c : list) {
+                            if ("Karmic Guide".equals(c.getName())) {
+                                choice = c;
+                                break;
                             }
-                        } else {
-                            choice = ComputerUtilCard.getBestCreatureToBounceAI(list);
                         }
-                    } else {
-                        choice = mostExpensive;
                     }
 
                     //option to hold removal instead only applies for single targeted removal
-                    if (!immediately && sa.getMaxTargets() == 1) {
-                        if (!ComputerUtilCard.useRemovalNow(sa, choice, 0, destination)) {
-                            return false;
-                        }
+                    if (!immediately && sa.getMaxTargets() == 1
+                            && !ComputerUtilCard.useRemovalNow(sa, choice, 0, destination)) {
+                        return false;
                     }
 
                     // Restore original list for next loop if filtered by MustTarget requirement
@@ -1218,24 +1227,20 @@ public class ChangeZoneAi extends SpellAbilityAi {
                     }
                     if (!doWithoutTarget) {
                         return false;
-                    } else {
-                        break;
                     }
-                } else {
-                    if (!sa.isTrigger() && !ComputerUtil.shouldCastLessThanMax(ai, source)) {
-                        boolean aiTgtsOK = false;
-                        if (sa.hasParam("AIMinTgts")) {
-                            int minTgts = Integer.parseInt(sa.getParam("AIMinTgts"));
-                            if (sa.getTargets().size() >= minTgts) {
-                                aiTgtsOK = true;
-                            }
-                        }
-                        if (!aiTgtsOK) {
-                            return false;
+                } else if (!sa.isTrigger() && !ComputerUtil.shouldCastLessThanMax(ai, source)) {
+                    boolean aiTgtsOK = false;
+                    if (sa.hasParam("AIMinTgts")) {
+                        int minTgts = Integer.parseInt(sa.getParam("AIMinTgts"));
+                        if (sa.getTargets().size() >= minTgts) {
+                            aiTgtsOK = true;
                         }
                     }
-                    break;
+                    if (!aiTgtsOK) {
+                        return false;
+                    }
                 }
+                break;
             }
 
             list.remove(choice);
@@ -1330,13 +1335,11 @@ public class ChangeZoneAi extends SpellAbilityAi {
                         }
                     }
                 }
-                Map<CounterType, Integer> counters = c.getCounters();
-                for (CounterType ct : counters.keySet()) {
-                    int amount = counters.get(ct);
-                    if (ComputerUtil.isNegativeCounter(ct, c)) {
-                        numNegativeCounters += amount;
+                for (Multiset.Entry<CounterType> e : c.getCounters().entrySet()) {
+                    if (ComputerUtil.isNegativeCounter(e.getElement(), c)) {
+                        numNegativeCounters += e.getCount();
                     }
-                    numTotalCounters += amount;
+                    numTotalCounters += e.getCount();
                 }
                 if (hasValuableAttachments || (ComputerUtilCard.isUselessCreature(ai, c) && !hasOppAttachments)) {
                     continue;
@@ -1374,28 +1377,27 @@ public class ChangeZoneAi extends SpellAbilityAi {
         final ZoneType destination = ZoneType.smartValueOf(sa.getParam("Destination"));
         final TargetRestrictions tgt = sa.getTargetRestrictions();
 
-        List<Card> list = CardUtil.getValidCardsToTarget(sa);
+        CardCollection list = CardUtil.getValidCardsToTarget(sa);
 
         if (list.isEmpty()) {
             return false;
         }
 
-        // target loop
         while (!sa.isMinTargetChosen()) {
-            // AI Targeting
             Card choice = null;
 
             // Filter out cards TargetsForEachPlayer
             list = CardLists.canSubsequentlyTarget(list, sa);
 
             if (!list.isEmpty()) {
-                Card mostExpensivePermanent = ComputerUtilCard.getMostExpensivePermanentAI(list);
-                if (mostExpensivePermanent.isCreature()
-                        && (destination.equals(ZoneType.Battlefield) || tgt.getZone().contains(ZoneType.Battlefield))) {
-                    // if a creature is most expensive take the best
-                    choice = ComputerUtilCard.getBestCreatureToBounceAI(list);
-                } else if (destination.equals(ZoneType.Battlefield) || tgt.getZone().contains(ZoneType.Battlefield)) {
-                    choice = mostExpensivePermanent;
+                if (tgt.getZone().contains(ZoneType.Battlefield)) {
+                    choice = ComputerUtilCard.getBestRemovalTargetAI(ai, list);
+                } else if (destination.equals(ZoneType.Battlefield)) {
+                    choice = ComputerUtilCard.getMostExpensivePermanentAI(list);
+                    if (choice.isCreature()) {
+                        // if a creature is most expensive take the best
+                        choice = ComputerUtilCard.getBestCreatureAI(list);
+                    }
                 } else if (destination.equals(ZoneType.Hand) || destination.equals(ZoneType.Library)) {
                     List<Card> nonLands = CardLists.getNotType(list, "Land");
                     // Prefer to pull a creature, generally more useful for AI.
@@ -1425,7 +1427,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 }
             }
             if (choice == null) { // can't find anything left
-                if (sa.getTargets().isEmpty() || sa.getTargets().size() < tgt.getMinTargets(sa.getHostCard(), sa)) {
+                if (sa.getTargets().isEmpty() || sa.getTargets().size() < sa.getMinTargets()) {
                     sa.resetTargets();
                     return false;
                 } 
@@ -1459,15 +1461,13 @@ public class ChangeZoneAi extends SpellAbilityAi {
         if ("DeathgorgeScavenger".equals(logic)) {
             if (SpecialCardAi.DeathgorgeScavenger.consider(ai, sa)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            } else {
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         } else if ("ExtraplanarLens".equals(logic)) {
             if (SpecialCardAi.ExtraplanarLens.consider(ai, sa)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            } else {
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         } else if ("ExileCombatThreat".equals(logic)) {
             return doExileCombatThreatLogic(ai, sa);
         }
@@ -1479,13 +1479,10 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 if (!list.isEmpty()) {
                     final Card attachedTo = list.get(0);
                     // This code is for the Dragon auras
-                    if (!attachedTo.getController().isOpponentOf(ai)) {
-                        // If the AI is not the controller of the attachedTo card, then it is not a valid target.
-                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-                    } else {
-                        // If the AI is the controller of the attachedTo card, then it is a valid target.
+                    if (attachedTo.getController().isOpponentOf(ai)) {
                         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                     }
+                    return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
                 }
             }
         } else if (isPreferredTarget(ai, sa, mandatory, true)) {
@@ -1493,10 +1490,9 @@ public class ChangeZoneAi extends SpellAbilityAi {
         } else {
             if (isUnpreferredTarget(ai, sa, mandatory)) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            } else {
-                // If the AI is not the controller of the attachedTo card, then it is not a valid target.
-                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
+            // If the AI is not the controller of the attachedTo card, then it is not a valid target.
+            return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
@@ -1506,6 +1502,43 @@ public class ChangeZoneAi extends SpellAbilityAi {
         if (fetchList.isEmpty()) {
             return null;
         }
+        if (destination == null) {
+            return fetchList.isEmpty() ? null : ComputerUtilCard.getBestAI(fetchList);
+        }
+        // an opponent choosing between cards revealed from outside the game (Extrapolate the Impossible, Wish-like
+        // effects with a chooser) hands over the worse one
+        if (player.isOpponentOf(decider) && ZoneType.Hand.equals(destination) && origin.contains(ZoneType.Sideboard)) {
+            return ComputerUtilCard.getWorstAI(fetchList);
+        }
+        List<String> keyCards = player.getRegisteredPlayer().getDeck().getKeyCards();
+        String position = sa.getParamOrDefault("LibraryPosition", null);
+        // Focus on the keycards I don't already have access to
+        if (destination.equals(ZoneType.Battlefield) || destination.equals(ZoneType.Hand) ||
+                (destination.equals(ZoneType.Library) && "0".equals(position))) {
+            for (Card c : player.getCardsIn(ZoneType.Hand, ZoneType.Battlefield)) {
+                keyCards.remove(c.getName());
+            }
+        }
+
+        // Can we extract this up to SPellAbilityAi for everything to have access to?
+        Card keycardFound = null;
+        for (String keyName : keyCards) {
+            CardCollection withKeyCard = CardLists.filter(fetchList, CardPredicates.nameEquals(keyName));
+            if (withKeyCard.isEmpty()) {
+                continue;
+            }
+            keycardFound = withKeyCard.getFirst();
+            break;
+        }
+
+        if (keycardFound == null && player == decider && player.getController() instanceof PlayerControllerAi
+                && (ZoneType.Hand.equals(destination) || ZoneType.Library.equals(destination) && "0".equals(position))) {
+            // no key card named by the deck file: the deck plan (combo, commander, ramp) knows what is missing,
+            // for the card taken into the hand and for the one put on top of the library (Vampiric Tutor)
+            keycardFound = ((PlayerControllerAi) player.getController()).getAi().deckPlan(player)
+                    .tutorPick(player, fetchList);
+        }
+
         if (sa.hasParam("AILogic")) {
             String logic = sa.getParamOrDefault("AILogic", "");
             if ("NeverBounceItself".equals(logic)) {
@@ -1517,9 +1550,11 @@ public class ChangeZoneAi extends SpellAbilityAi {
             } else if ("WorstCard".equals(logic)) {
                 return ComputerUtilCard.getWorstAI(fetchList);
             } else if ("BestCard".equals(logic)) {
+                if (keycardFound != null) return keycardFound;
+
                 return ComputerUtilCard.getBestAI(fetchList); // generally also means the most expensive one or close to it
             } else if ("Mairsil".equals(logic)) {
-                return SpecialCardAi.MairsilThePretender.considerCardFromList(fetchList);
+                return SpecialCardAi.MairsilThePretender.considerCardFromList(fetchList, sa);
             } else if ("SurvivalOfTheFittest".equals(logic)) {
                 return SpecialCardAi.SurvivalOfTheFittest.considerCardToGet(decider, sa);
             } else if ("MazesEnd".equals(logic)) {
@@ -1534,6 +1569,12 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 return doExilePreferenceLogic(decider, sa, fetchList);
             } else if (logic.equals("BounceOwnTrigger")) {
                 return doBounceOwnTriggerLogic(decider, sa, fetchList);
+            } else if (logic.equals("ConsiderRamp")) {
+                Card c = considerRamp(decider, sa, fetchList, keycardFound);
+
+                if (c != null) {
+                    return c;
+                }
             }
         }
         if (fetchList.isEmpty()) {
@@ -1545,22 +1586,26 @@ public class ChangeZoneAi extends SpellAbilityAi {
         final Player activator = sa.getActivatingPlayer();
 
         CardLists.shuffle(fetchList);
-        // Save a card as a default, in case we can't find anything suitable.
+        // Save a card as a default, in case we can't find anything suitable
         Card first = fetchList.get(0);
+
         if (ZoneType.Battlefield.equals(destination)) {
-            fetchList = CardLists.filter(fetchList, c1 -> {
-                if (c1.getType().isLegendary()) {
-                    return !decider.isCardInPlay(c1.getName());
-                }
-                return true;
-            });
+            fetchList = CardLists.filter(fetchList, c1 -> !c1.getType().isLegendary() || !decider.isCardInPlay(c1.getName()));
+            if (!sa.hasParam("FaceDown")) {
+                // an Aura with nothing to enchant would stay where it is
+                final Game game = decider.getGame();
+                fetchList = CardLists.filter(fetchList, c1 -> !c1.isAura()
+                        || game.getPlayers().stream().anyMatch(PlayerPredicates.canBeAttached(c1, null))
+                        || game.getCardsIn(ZoneType.Battlefield).anyMatch(CardPredicates.canBeAttached(c1, null))
+                        || game.getCardsIn(ZoneType.Graveyard).anyMatch(CardPredicates.canBeAttached(c1, null)));
+            }
             if (player.isOpponentOf(decider) && sa.hasParam("GainControl") && activator.equals(decider)) {
-                fetchList = CardLists.filter(fetchList, c12 -> !ComputerUtilCard.isCardRemAIDeck(c12) && !ComputerUtilCard.isCardRemRandomDeck(c12));
+                fetchList = CardLists.filter(fetchList, c1 -> !ComputerUtilCard.isCardRemAIDeck(c1) && !ComputerUtilCard.isCardRemRandomDeck(c1));
             }
         }
         if (ZoneType.Exile.equals(destination) || origin.contains(ZoneType.Battlefield)
                 || (ZoneType.Library.equals(destination) && origin.contains(ZoneType.Hand))) {
-            // Exiling or bouncing stuff
+            // Exiling or bouncing
             if (player.isOpponentOf(decider)) {
                 c = ComputerUtilCard.getBestAI(fetchList);
             } else {
@@ -1582,13 +1627,19 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 }
             }
         } else if (origin.contains(ZoneType.Library) && (type.contains("Basic") || areAllBasics(type))) {
+            if (keycardFound != null) return keycardFound;
+
             c = basicManaFixing(decider, fetchList);
         } else if (ZoneType.Hand.equals(destination) && CardLists.getNotType(fetchList, "Creature").isEmpty()) {
+            if (keycardFound != null) return keycardFound;
+
             c = chooseCreature(decider, fetchList);
         } else if (ZoneType.Battlefield.equals(destination) || ZoneType.Graveyard.equals(destination)) {
             if (!activator.equals(decider) && sa.hasParam("GainControl")) {
                 c = ComputerUtilCard.getWorstAI(fetchList);
             } else {
+                if (keycardFound != null) return keycardFound;
+
                 c = ComputerUtilCard.getBestAI(fetchList);
             }
         } else {
@@ -1598,16 +1649,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 fetchList = sameNamed;
             }
 
+            // Tutor for the first key card in the list, since the list should be in priority order
+            if (keycardFound != null) return keycardFound;
+
             // Does AI need a land?
+            // The logic here seems wrong if the decider isn't the same as the player
             CardCollectionView hand = decider.getCardsIn(ZoneType.Hand);
-            if (!hand.anyMatch(CardPredicates.LANDS) && CardLists.count(decider.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS) < 4) {
-                boolean canCastSomething = false;
-                for (Card cardInHand : hand) {
-                    canCastSomething = canCastSomething || ComputerUtilMana.hasEnoughManaSourcesToCast(cardInHand.getFirstSpellAbility(), decider);
-                }
-                if (!canCastSomething) {
-                    c = basicManaFixing(decider, fetchList);
-                }
+            if (!hand.anyMatch(CardPredicates.LANDS) && CardLists.count(decider.getCardsIn(ZoneType.Battlefield), CardPredicates.LANDS) < 4 &&
+                    !hand.anyMatch(crd -> ComputerUtilMana.hasEnoughManaSourcesToCast(crd.getFirstSpellAbility(), decider))) {
+                c = basicManaFixing(decider, fetchList);
             }
             if (c == null) {
                 if (fetchList.allMatch(CardPredicates.LANDS)) {
@@ -1697,7 +1747,12 @@ public class ChangeZoneAi extends SpellAbilityAi {
     @Override
     public Card chooseSingleCard(Player ai, SpellAbility sa, Iterable<Card> options, boolean isOptional, Player targetedPlayer, Map<String, Object> params) {
         // Called when looking for creature to attach aura or equipment
-        return AttachAi.attachGeneralAI(ai, sa, (List<Card>)options, !isOptional, (Card) params.get("Attach"), sa.getParam("AILogic"));
+
+        if (params.containsKey("Attach")) {
+            return AttachAi.attachGeneralAI(ai, sa, (List<Card>)options, !isOptional, (Card) params.get("Attach"), sa.getParam("AILogic"));
+        }
+
+        return super.chooseSingleCard(ai, sa, options, isOptional, targetedPlayer, params);
     }
 
     /* (non-Javadoc)
@@ -1726,7 +1781,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
         String definedSac = StringUtils.split(source.getSVar("AIPreference"), "$")[1];
 
         CardCollection listToSac = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), definedSac, ai, source, sa);
-        listToSac.sort(Collections.reverseOrder(CardLists.CmcComparatorInv));
+        listToSac.sort(CardLists.CmcComparator);
 
         CardCollection listToRet = CardLists.filter(ai.getCardsIn(ZoneType.Graveyard), CardPredicates.CREATURES);
         listToRet.sort(CardLists.CmcComparatorInv);
@@ -1763,7 +1818,7 @@ public class ChangeZoneAi extends SpellAbilityAi {
         boolean anyCMC = !definedGoal.contains(".cmc");
 
         CardCollection listToSac = CardLists.getValidCards(ai.getCardsIn(ZoneType.Battlefield), definedSac, ai, source, sa);
-        listToSac.sort(!sacWorst ? CardLists.CmcComparatorInv : Collections.reverseOrder(CardLists.CmcComparatorInv));
+        listToSac.sort(!sacWorst ? CardLists.CmcComparatorInv : CardLists.CmcComparator);
 
         for (Card sacCandidate : listToSac) {
             int sacCMC = sacCandidate.getCMC();
@@ -1801,51 +1856,41 @@ public class ChangeZoneAi extends SpellAbilityAi {
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
     }
 
-    public AiAbilityDecision doReturnCommanderLogic(SpellAbility sa, Player aiPlayer) {
+    public AiAbilityDecision doReturnCommanderLogic(SpellAbility sa, Player ai) {
         @SuppressWarnings("unchecked")
         Map<AbilityKey, Object> originalParams = (Map<AbilityKey, Object>)sa.getReplacingObject(AbilityKey.OriginalParams);
         SpellAbility causeSa = (SpellAbility)originalParams.get(AbilityKey.Cause);
         SpellAbility causeSub = null;
         ZoneType destination = (ZoneType)originalParams.get(AbilityKey.Destination);
 
-        if (Objects.equals(ZoneType.Hand, destination)) {
-            // If the commander is being moved to your hand, don't replace since its easier to cast it again
+        if (destination == ZoneType.Hand) {
+            // don't replace since its easier to cast it again
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
-        // Squee, the Immortal: easier to recast it (the call below has to be "contains" since SA is an intrinsic effect)
-        if (sa.getHostCard().getName().contains("Squee, the Immortal") &&
-                (destination == ZoneType.Graveyard || destination == ZoneType.Exile)) {
+        if (originalParams.get(AbilityKey.Affected) instanceof Card c &&
+                c.getName().equals("Squee, the Immortal") && (destination == ZoneType.Graveyard || destination == ZoneType.Exile)) {
+            // easier to recast it
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
         if (causeSa != null && (causeSub = causeSa.getSubAbility()) != null) {
             ApiType subApi = causeSub.getApi();
 
-            if (subApi == ApiType.ChangeZone && "Exile".equals(causeSub.getParam("Origin"))
-                    && "Battlefield".equals(causeSub.getParam("Destination"))) {
+            if (subApi == ApiType.ChangeZone
+                    && "Exile".equals(causeSub.getParam("Origin")) && "Battlefield".equals(causeSub.getParam("Destination"))) {
                 // A blink effect implemented using ChangeZone API
                 return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
-            } else // This is an intrinsic effect that blinks the card (e.g. Obzedat, Ghost Council), no need to
-                // return the commander to the Command zone.
-                if (subApi == ApiType.DelayedTrigger) {
-                    SpellAbility exec = causeSub.getAdditionalAbility("Execute");
-                if (exec != null && exec.getApi() == ApiType.ChangeZone) {
+            } else if (subApi == ApiType.DelayedTrigger) {
+                SpellAbility exec = causeSub.getAdditionalAbility("Execute");
+                if (exec != null && exec.getApi() == ApiType.ChangeZone
+                        && "Exile".equals(exec.getParam("Origin")) && "Battlefield".equals(exec.getParam("Destination"))) {
                     // A blink effect implemented using a delayed trigger
-                    if (!"Exile".equals(exec.getParam("Origin")) || !"Battlefield".equals(exec.getParam("Destination"))) {
-                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-                    } else {
-                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
-                    }
+                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
-            } else {
-                    if (causeSa.getHostCard() == null || !causeSa.getHostCard().equals(sa.getReplacingObject(AbilityKey.Card))
-                            || !causeSa.getActivatingPlayer().equals(aiPlayer)) {
-                        return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-                    } else {
-                        return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
-                    }
-                }
+            } else if (sa.getReplacingObject(AbilityKey.Card).equals(causeSa.getHostCard()) && causeSa.getActivatingPlayer().equals(ai)) {
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
+            }
         }
 
         // Normally we want the commander back in Command zone to recast it later
@@ -1958,7 +2003,8 @@ public class ChangeZoneAi extends SpellAbilityAi {
 
             if (!preferredOppList.isEmpty()) {
                 return Aggregates.random(preferredOppList);
-            } else if (!preferredList.isEmpty()) {
+            }
+            if (!preferredList.isEmpty()) {
                 return Aggregates.random(preferredList);
             }
 
@@ -2029,21 +2075,15 @@ public class ChangeZoneAi extends SpellAbilityAi {
                 Player opp = potentialTgt.getController();
                 int usableManaSources = ComputerUtilMana.getAvailableManaEstimate(opp);
 
-                int toPay = 0;
-                boolean setPayX = false;
+                int toPay;
                 if (unlessCost.equals("X") && sa.getSVar(unlessCost).equals("Count$xPaid")) {
-                    setPayX = true;
-                    toPay = ComputerUtilCost.getMaxXValue(sa, ai, true);
+                    toPay = ComputerUtilCost.setMaxXValue(sa, ai, true);
                 } else {
                     toPay = AbilityUtils.calculateAmount(source, unlessCost, sa);
                 }
 
                 if (toPay == 0 || toPay <= usableManaSources) {
                     canBeSaved.add(potentialTgt);
-                }
-
-                if (setPayX) {
-                    sa.setXManaCostPaid(toPay);
                 }
             }
         }
@@ -2071,6 +2111,45 @@ public class ChangeZoneAi extends SpellAbilityAi {
             return ComputerUtilCard.getWorstAI(unprefChoices);
         }
         return null;
+    }
+
+    private static Card considerRamp(Player ai, SpellAbility sa, CardCollection choices, Card keycardFound) {
+        // For cards that might fetch a land or other things, but really might need the land right now.
+        // Do a rough check of available mana sources (lands on battlefield, other mana producers on battlefield,
+        // and lands in hand) to decide whether to prioritize fetching a land.
+
+        // Count non-land permanents on the battlefield that produce mana (e.g. mana rocks, dorks)
+        int manaProducers = 0;
+        for (Card c : ai.getCardsIn(ZoneType.Battlefield)) {
+            if (!c.getManaAbilities().isEmpty()) {
+                manaProducers++;
+            }
+        }
+
+        // Count lands in hand (they represent future mana sources we expect to play)
+        int landsInHand = CardLists.filter(ai.getCardsIn(ZoneType.Hand), CardPredicates.LANDS).size();
+
+        int totalManaSources = manaProducers + landsInHand;
+
+        // Base threshold: below this many total mana sources we should prioritize getting a land
+        int threshold = 4;
+
+        // If we have a keycard target, also make sure we'll eventually have enough mana to cast it.
+        // If the keycard's CMC is further than one land drop away from our current sources, keep ramping.
+        if (keycardFound != null && keycardFound.getCMC() > totalManaSources + 1) {
+            threshold = Math.max(threshold, keycardFound.getCMC() - 1);
+        }
+
+        // If we are below the threshold, look for a land in the available choices and prefer it
+        if (totalManaSources < threshold) {
+            Card manaFixing = basicManaFixing(ai, choices);
+            if (manaFixing != null) {
+                return manaFixing;
+            }
+        }
+
+        // We have enough mana sources — let the caller use keycardFound (may be null, triggering fallthrough)
+        return keycardFound;
     }
 
     @Override

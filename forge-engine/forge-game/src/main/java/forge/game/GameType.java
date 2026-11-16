@@ -19,6 +19,7 @@ public enum GameType {
 
     Sealed              (DeckFormat.Limited, true, true, true, "lblSealed", ""),
     Draft               (DeckFormat.Limited, true, true, true, "lblDraft", ""),
+    CommanderDraft      (DeckFormat.CommanderDraft, true, true, true, "lblCommanderDraft", "lblCommanderDraftDesc"),
     Winston             (DeckFormat.Limited, true, true, true, "lblWinston", ""),
     Gauntlet            (DeckFormat.Constructed, false, true, true, "lblGauntlet", ""),
     Tournament          (DeckFormat.Constructed, false, true, true, "lblTournament", ""),
@@ -41,15 +42,15 @@ public enum GameType {
     Planechase          (DeckFormat.Planechase, false, false, true, "lblPlanechase", "lblPlanechaseDesc"),
     Archenemy           (DeckFormat.Archenemy, false, false, true, "lblArchenemy", "lblArchenemyDesc"),
     ArchenemyRumble     (DeckFormat.Archenemy, false, false, true, "lblArchenemyRumble", "lblArchenemyRumbleDesc"),
+    TwoHeadedGiant      (DeckFormat.Constructed, false, true, true, "lblTwoHeadedGiant", "lblTwoHeadedGiantDesc"),
     MomirBasic          (DeckFormat.Constructed, false, false, false, "lblMomirBasic", "lblMomirBasicDesc", player -> {
         Deck deck = new Deck();
         CardPool mainDeck = deck.getMain();
-        String setcode = Aggregates.random(StaticData.instance().getBlockLands());
-        mainDeck.add("Plains", setcode, 12, true);
-        mainDeck.add("Island", setcode, 12, true);
-        mainDeck.add("Swamp", setcode, 12, true);
-        mainDeck.add("Mountain", setcode, 12, true);
-        mainDeck.add("Forest", setcode, 12, true);
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Plains"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Island"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Swamp"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Mountain"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Forest"), 12));
         deck.getOrCreate(DeckSection.Avatar).add(StaticData.instance().getVariantCards()
                 .getCard("Momir Vig, Simic Visionary Avatar"), 1);
         return deck;
@@ -57,12 +58,11 @@ public enum GameType {
     MoJhoSto      (DeckFormat.Constructed, false, false, false, "lblMoJhoSto", "lblMoJhoStoDesc", player -> {
         Deck deck = new Deck();
         CardPool mainDeck = deck.getMain();
-        String setcode = Aggregates.random(StaticData.instance().getBlockLands());
-        mainDeck.add("Plains", setcode, 12, true);
-        mainDeck.add("Island", setcode, 12, true);
-        mainDeck.add("Swamp", setcode, 12, true);
-        mainDeck.add("Mountain", setcode, 12, true);
-        mainDeck.add("Forest", setcode, 12, true);
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Plains"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Island"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Swamp"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Mountain"), 12));
+        mainDeck.add(Aggregates.random(StaticData.instance().getCommonCards().getAllCards("Forest"), 12));
         deck.getOrCreate(DeckSection.Avatar).add(StaticData.instance().getVariantCards()
                 .getCard("Momir Vig, Simic Visionary Avatar"), 1);
         deck.getOrCreate(DeckSection.Avatar).add(StaticData.instance().getVariantCards()
@@ -72,7 +72,7 @@ public enum GameType {
         return deck;
     });
 
-    private static final EnumSet<GameType> DRAFT_FORMATS = EnumSet.of(Draft, QuestDraft, AdventureEvent);
+    private static final EnumSet<GameType> DRAFT_FORMATS = EnumSet.of(Draft, CommanderDraft, QuestDraft, AdventureEvent);
 
     private final DeckFormat deckFormat;
     private final boolean isCardPoolLimited, canSideboard, addWonCardsMidGame;
@@ -159,11 +159,12 @@ public enum GameType {
         if(!deckFormat.getPrimaryDeckSections().contains(DeckSection.Main))
             return EnumSet.noneOf(DeckSection.class); //Already an extra deck, like a dedicated Scheme or Planar deck.
         if(deckFormat == DeckFormat.Limited)
-            return EnumSet.of(DeckSection.Conspiracy, DeckSection.Contraptions, DeckSection.Attractions);
+            return EnumSet.of(DeckSection.Conspiracy, DeckSection.Contraptions, DeckSection.Attractions,
+                    DeckSection.Stickers);
         if(this == Constructed || this == Commander)
             return EnumSet.of(DeckSection.Avatar, DeckSection.Schemes, DeckSection.Planes, DeckSection.Conspiracy,
-                    DeckSection.Attractions, DeckSection.Contraptions);
-        return EnumSet.of(DeckSection.Attractions, DeckSection.Contraptions);
+                    DeckSection.Attractions, DeckSection.Contraptions, DeckSection.Stickers);
+        return EnumSet.of(DeckSection.Attractions, DeckSection.Contraptions, DeckSection.Stickers);
     }
 
     public static GameType smartValueOf(String name) {

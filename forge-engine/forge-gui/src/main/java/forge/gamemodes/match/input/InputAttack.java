@@ -22,6 +22,7 @@ import forge.game.GameEntity;
 import forge.game.GameEntityView;
 import forge.game.card.Card;
 import forge.game.card.CardCollectionView;
+import forge.game.card.CardLists;
 import forge.game.card.CardView;
 import forge.game.combat.AttackingBand;
 import forge.game.combat.Combat;
@@ -29,11 +30,12 @@ import forge.game.combat.CombatUtil;
 import forge.game.event.GameEventCombatUpdate;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
-import forge.game.player.PlayerView;
 import forge.game.staticability.StaticAbilityMustAttack;
 import forge.game.zone.ZoneType;
+import forge.gamemodes.match.Selection;
 import forge.gui.events.UiEventAttackerDeclared;
 import forge.player.PlayerControllerHuman;
+import forge.trackable.TrackableObject;
 import forge.util.ITriggerEvent;
 import forge.util.Localizer;
 import forge.util.collect.FCollectionView;
@@ -82,7 +84,7 @@ public class InputAttack extends InputSyncronizedBase {
 
     //determine whether currently attackers can be called back (undeclared)
     private boolean canCallBackAttackers() {
-        return !combat.getAttackers().isEmpty();
+        return !CardLists.filterControlledBy(combat.getAttackers(), playerAttacks).isEmpty();
     }
 
     private void updatePrompt() {
@@ -99,8 +101,6 @@ public class InputAttack extends InputSyncronizedBase {
     @Override
     protected final void onOk() {
         // Propaganda costs could have been paid here.
-        setCurrentDefender(null); // remove highlights
-        activateBand(null);
         stop();
     }
 
@@ -109,8 +109,7 @@ public class InputAttack extends InputSyncronizedBase {
         //either alpha strike or undeclare all attackers based on whether any attackers have been declared
         if (canCallBackAttackers()) {
             //undeclare all attackers
-            List<Card> attackers = new ArrayList<>(combat.getAttackers()); //must copy list since it will be modified
-            for (Card c : attackers) {
+            for (Card c : CardLists.filterControlledBy(combat.getAttackers(), playerAttacks)) {
                 undeclareAttacker(c);
             }
         } else {
@@ -189,28 +188,26 @@ public class InputAttack extends InputSyncronizedBase {
             if (potentialBanding) {
                 // Activate band by selecting/deselecting a band member
                 if (activeBand == null) {
-                    activateBand(combat.getBandOfAttacker(card));
+                    activeBand = combat.getBandOfAttacker(card);
                 }
                 else if (activeBand.getAttackers().contains(card)) {
-                    activateBand(null);
+                    activeBand = null;
                 }
-                else { // Join a band by selecting a non-active band member after activating a band
-                    if (activeBand.canJoinBand(card)) {
-                        declareAttacker(card);
-                        if (otherCardsToSelect != null) {
-                            for (Card c : otherCardsToSelect) {
-                                if (activeBand.canJoinBand(c)) {
-                                    declareAttacker(c);
-                                }
+                else if (activeBand.canJoinBand(card)) {
+                    // Join a band by selecting a non-active band member after activating a band
+                    declareAttacker(card);
+                    if (otherCardsToSelect != null) {
+                        for (Card c : otherCardsToSelect) {
+                            if (activeBand.canJoinBand(c)) {
+                                declareAttacker(c);
                             }
                         }
                     }
-                    else {
-                        validAction = false;
-                    }
                 }
-            }
-            else {
+                else {
+                    validAction = false;
+                }
+            } else {
                 //if banding not possible, just undeclare attacker
                 undeclareAttacker(card);
                 if (otherCardsToSelect != null) {
@@ -234,7 +231,7 @@ public class InputAttack extends InputSyncronizedBase {
 
         if (playerAttacks.getZone(ZoneType.Battlefield).contains(card) && CombatUtil.canAttack(card, currentDefender)) {
             if (activeBand != null && !activeBand.canJoinBand(card)) {
-                activateBand(null);
+                activeBand = null;
                 updateMessage();
                 return false;
             }
@@ -279,34 +276,21 @@ public class InputAttack extends InputSyncronizedBase {
     private void declareAttacker(final Card card) {
         combat.removeFromCombat(card);
         combat.addAttacker(card, currentDefender, activeBand);
-        activateBand(activeBand);
 
-        card.getGame().getMatch().fireEvent(new UiEventAttackerDeclared(
-                CardView.get(card),
-                GameEntityView.get(currentDefender)));
+        card.getGame().getMatch().fireEvent(new UiEventAttackerDeclared(CardView.get(card), GameEntityView.get(currentDefender)));
     }
 
     private boolean undeclareAttacker(final Card card) {
         combat.removeFromCombat(card);
-        getController().getGui().setUsedToPay(CardView.get(card), false);
         // When removing an attacker clear the attacking band
-        activateBand(null);
+        activeBand = null;
 
-        card.getGame().getMatch().fireEvent(new UiEventAttackerDeclared(
-                CardView.get(card), null));
+        card.getGame().getMatch().fireEvent(new UiEventAttackerDeclared(CardView.get(card), null));
         return true;
     }
 
     private void setCurrentDefender(final GameEntity def) {
         currentDefender = def;
-        for (final GameEntity ge : defenders) {
-            if (ge instanceof Card) {
-                getController().getGui().setUsedToPay(CardView.get((Card) ge), ge == def);
-            }
-            else if (ge instanceof Player) {
-                getController().getGui().setHighlighted(PlayerView.get((Player) ge), ge == def);
-            }
-        }
         if (def != null) {
             potentialBanding = isBandingPossible();
         }
@@ -314,19 +298,22 @@ public class InputAttack extends InputSyncronizedBase {
         updateMessage();
     }
 
-    private void activateBand(final AttackingBand band) {
-        if (activeBand != null) {
-            for (final Card card : activeBand.getAttackers()) {
-                getController().getGui().setUsedToPay(CardView.get(card), false);
-            }
+    /** The defender being attacked and the band being formed. */
+    @Override
+    protected Selection getSelection() {
+        final List<TrackableObject> chosen = new ArrayList<>();
+        if (currentDefender != null) {
+            chosen.add(GameEntityView.get(currentDefender));
         }
-        activeBand = band;
+        if (activeBand != null) {
+            for (final Card card : activeBand.getAttackers()) chosen.add(CardView.get(card));
+        }
+        return Selection.ofChosen(chosen);
+    }
 
-        if (activeBand != null) {
-            for (final Card card : activeBand.getAttackers()) {
-                getController().getGui().setUsedToPay(CardView.get(card), true);
-            }
-        }
+    @Override
+    protected List<CardView> getActionable() {
+        return getController().getAttackerCandidates(playerAttacks, combat);
     }
 
     //only enable banding message and actions if a creature that can attack has banding
@@ -350,6 +337,10 @@ public class InputAttack extends InputSyncronizedBase {
         showMessage(message);
 
         updatePrompt();
+
+        // Resent after each click so declared attackers stop glowing.
+        // Can't reuse showMessage() — it also resets currentDefender.
+        showSelection();
 
         if (combat != null)
             getController().getGame().fireEvent(GameEventCombatUpdate.fromCards(combat.getAttackers(), combat.getAllBlockers()));
