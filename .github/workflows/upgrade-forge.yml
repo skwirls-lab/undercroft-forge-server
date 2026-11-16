@@ -30,6 +30,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
   upgrade:
@@ -79,9 +80,13 @@ jobs:
             --filter=blob:none --sparse \
             https://github.com/Card-Forge/forge "$RUNNER_TEMP/upstream"
           cd "$RUNNER_TEMP/upstream"
-          git sparse-checkout set \
-            forge-core forge-game forge-ai forge-gui pom.xml \
-            forge-gui/res/cardsfolder forge-gui/res/editions forge-gui/res/tokenscripts
+          # Cone mode takes directories only: naming pom.xml here made every run die with
+          # "'pom.xml' is not a directory" before anything was fetched, which is how the
+          # job failed silently every Monday from 2026-09-21 to 2026-11-16. Files at the
+          # repository root (pom.xml included) are always present in a cone checkout, and
+          # forge-gui brings its res/ tree with it.
+          git sparse-checkout set forge-core forge-game forge-ai forge-gui
+          test -f pom.xml && test -d forge-gui/res/cardsfolder
 
       # The vendored engine carries no local patches (verified: zero net diff against the
       # original import), so replacing it wholesale is safe. If that ever stops being true,
@@ -198,3 +203,24 @@ jobs:
             card. Reviewing it file by file is not the point; the gates are.
 
             **Merging triggers a Railway deploy.**
+
+      # A job that fails quietly every week is the same as no job: this one failed at the
+      # clone step for eight weeks while new sets went unplayable, and nobody was told. On
+      # any failure, open an issue (or add to the open one) so it lands in the inbox.
+      - name: Report the failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          title="Upgrade Forge is failing"
+          url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="The weekly Forge upgrade failed on $(date -u +%Y-%m-%d): $url
+
+          Until it passes, cards from sets newer than the vendored engine's data say \"won't work in Forge\" on import. Read the run's log for the step that failed; the usual fixes are in the workflow's comments."
+          existing="$(gh issue list --repo "${{ github.repository }}" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" --body "Failed again: $url"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "$title" --body "$body"
+          fi
