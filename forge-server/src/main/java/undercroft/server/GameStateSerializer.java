@@ -3,6 +3,7 @@ package undercroft.server;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import forge.card.ColorSet;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.card.CardCollectionView;
@@ -162,6 +163,18 @@ public class GameStateSerializer {
             card.addProperty("typeLine", c.getType().toString());
             card.addProperty("manaCost", c.getManaCost().toString());
             card.addProperty("oracleText", c.getOracleText());
+
+            // Colour as the rules see it, not as the mana cost suggests: a token has no mana
+            // cost, a colour-changing effect has no symbol. The client tints art-less faces
+            // with this and frames every card by it.
+            JsonArray colors = new JsonArray();
+            ColorSet color = c.getColor();
+            if (color.hasWhite()) colors.add("W");
+            if (color.hasBlue()) colors.add("U");
+            if (color.hasBlack()) colors.add("B");
+            if (color.hasRed()) colors.add("R");
+            if (color.hasGreen()) colors.add("G");
+            card.add("colors", colors);
 
             if (c.isCreature()) {
                 card.addProperty("power", c.getNetPower());
