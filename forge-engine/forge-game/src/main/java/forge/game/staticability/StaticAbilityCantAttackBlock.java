@@ -125,7 +125,6 @@ public class StaticAbilityCantAttackBlock {
     }
 
     public static boolean canAttackDefender(final Card card, final GameEntity target) {
-        // CanAttack static abilities
         for (final Card ca : card.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CanAttackDefender)) {
@@ -157,9 +156,8 @@ public class StaticAbilityCantAttackBlock {
             return true;
         }
 
-        CardCollection list = new CardCollection(blocker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
-        // add blocker in case of LKI
-        list.add(blocker);
+        CardCollection list = new CardCollection(blocker);
+        list.addAll(blocker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
         for (final Card ca : list) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CantBlock)) {
@@ -207,12 +205,12 @@ public class StaticAbilityCantAttackBlock {
     }
 
     public static boolean cantBlockBy(final Card attacker, final Card blocker) {
-        CardCollection list = new CardCollection(attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
-        // add attacker and blocker in case of LKI
-        list.add(attacker);
+        // add attacker and blocker first in case of LKI
+        CardCollection list = new CardCollection(attacker);
         if (blocker != null) {
             list.add(blocker);
         }
+        list.addAll(attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES));
         for (final Card ca : list) {
             for (final StaticAbility stAb : ca.getStaticAbilities()) {
                 if (!stAb.checkConditions(StaticAbilityMode.CantBlockBy)) {
@@ -246,6 +244,10 @@ public class StaticAbilityCantAttackBlock {
                     stillblock = false;
                     // Dragon Hunter check
                     if (v.contains("withoutReach") && canBlockIfReach(attacker, blocker)) {
+                        stillblock = true;
+                    }
+                    // Heartwood Dryad / Wall of Diffusion / Aetherflame Wall / Aether Web check
+                    if (v.contains("withoutShadow") && canBlockIfShadow(attacker, blocker)) {
                         stillblock = true;
                     }
                     if (!stillblock) {
@@ -290,6 +292,30 @@ public class StaticAbilityCantAttackBlock {
     }
 
     public static boolean applyCanBlockIfReachAbility(final StaticAbility stAb, final Card attacker, final Card blocker) {
+        if (!stAb.matchesValidParam("ValidAttacker", attacker)) {
+            return false;
+        }
+        if (!stAb.matchesValidParam("ValidBlocker", blocker)) {
+            return false;
+        }
+        return true;
+    }
+
+    public static boolean canBlockIfShadow(final Card attacker, final Card blocker) {
+        for (final Card ca : attacker.getGame().getCardsIn(ZoneType.STATIC_ABILITIES_SOURCE_ZONES)) {
+            for (final StaticAbility stAb : ca.getStaticAbilities()) {
+                if (!stAb.checkConditions(StaticAbilityMode.CanBlockIfShadow)) {
+                    continue;
+                }
+                if (applyCanBlockIfShadowAbility(stAb, attacker, blocker)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public static boolean applyCanBlockIfShadowAbility(final StaticAbility stAb, final Card attacker, final Card blocker) {
         if (!stAb.matchesValidParam("ValidAttacker", attacker)) {
             return false;
         }

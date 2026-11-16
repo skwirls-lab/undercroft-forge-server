@@ -145,7 +145,6 @@ public class TriggerSpellAbilityCastOrCopy extends Trigger {
         }
 
         if (hasParam("CanTargetOtherCondition")) {
-            final CardCollection candidates = new CardCollection();
             SpellAbility targetedSA = spellAbility;
             while (targetedSA != null) {
                 if (targetedSA.usesTargeting() && targetedSA.getTargets().size() != 0) {
@@ -156,15 +155,15 @@ public class TriggerSpellAbilityCastOrCopy extends Trigger {
             if (targetedSA == null) {
                 return false;
             }
-            final List<GameEntity> candidateTargets = targetedSA.getTargetRestrictions().getAllCandidates(targetedSA, true);
+            final CardCollection candidates = new CardCollection();
+            final List<GameEntity> candidateTargets = targetedSA.getTargetRestrictions().getAllCandidates(targetedSA);
             for (GameEntity card : candidateTargets) {
-                if (card instanceof Card) {
-                    candidates.add((Card) card);
+                if (card instanceof Card c) {
+                    candidates.add(c);
                 }
             }
             candidates.removeAll(targetedSA.getTargets().getTargetCards());
-            String valid = getParam("CanTargetOtherCondition");
-            if (CardLists.getValidCards(candidates, valid, spellAbility.getActivatingPlayer(), spellAbility.getHostCard(), spellAbility).isEmpty()) {
+            if (CardLists.getValidCards(candidates, getParam("CanTargetOtherCondition"), spellAbility.getActivatingPlayer(), spellAbility.getHostCard(), spellAbility).isEmpty()) {
                 return false;
             }
         }
@@ -230,21 +229,21 @@ public class TriggerSpellAbilityCastOrCopy extends Trigger {
 
     /** {@inheritDoc} */
     @Override
-    public final void setTriggeringObjects(final SpellAbility sa, Map<AbilityKey, Object> runParams) {
+    public final void setTriggeringObjects(final Map<AbilityKey, Object> objects, Map<AbilityKey, Object> runParams) {
         final SpellAbility cause = (SpellAbility) runParams.get(AbilityKey.SpellAbility);
-        sa.setTriggeringObject(AbilityKey.Card, cause.getHostCard());
-        sa.setTriggeringObject(AbilityKey.SpellAbility, cause);
+        objects.put(AbilityKey.Card, cause.getHostCard());
+        objects.put(AbilityKey.SpellAbility, cause);
         final List<TargetChoices> allTgts = cause.getAllTargetChoices();
         if (!allTgts.isEmpty()) {
             final FCollection<GameEntity> saTargets = new FCollection<>();
             for (TargetChoices tc : allTgts) {
                 saTargets.addAll(tc.getTargetEntities());
             }
-            sa.setTriggeringObject(AbilityKey.SpellAbilityTargets, saTargets);
+            objects.put(AbilityKey.SpellAbilityTargets, saTargets);
         }
-        sa.setTriggeringObject(AbilityKey.LifeAmount, cause.getAmountLifePaid());
-        sa.setTriggeringObjectsFrom(
-                runParams,
+        objects.put(AbilityKey.LifeAmount, cause.getAmountLifePaid());
+        AbilityKey.copyKeys(
+                runParams, objects,
                 AbilityKey.CardLKI,
                 AbilityKey.Activator,
                 AbilityKey.CurrentStormCount,

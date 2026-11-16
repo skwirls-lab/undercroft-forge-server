@@ -25,7 +25,6 @@ import forge.game.staticability.StaticAbilityMode;
 import forge.game.trigger.TriggerType;
 import forge.game.zone.Zone;
 import forge.game.zone.ZoneType;
-import forge.util.Localizer;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.List;
@@ -229,7 +228,7 @@ public class CostAdjustment {
         }
 
         while (!reduceAbilities.isEmpty()) {
-            StaticAbility choice = activator.getController().chooseSingleStaticAbility(Localizer.getInstance().getMessage("lblChooseCostReduction"), reduceAbilities);
+            StaticAbility choice = activator.getController().chooseSingleStaticAbility(reduceAbilities);
             reduceAbilities.remove(choice);
             sumGeneric += applyReduceCostAbility(choice, sa, cost, sumGeneric);
         }
@@ -353,6 +352,10 @@ public class CostAdjustment {
             untappedCards = CardLists.filter(untappedCards, CardPredicates.CREATURES);
         }
 
+        if (untappedCards.isEmpty()) {
+            return;
+        }
+
         Map<Card, ManaCostShard> convokedCards = payer.getController().chooseCardsForConvokeOrImprovise(sa,
                 cost.toManaCost(), untappedCards, artifacts, creatures, maxReduction);
 
@@ -364,7 +367,7 @@ public class CostAdjustment {
             }
             cost.decreaseShard(conv.getValue(), 1);
             if (!test) {
-                if (c.tap(true, sa, payer)) tapped.add(c);
+                if (c.tap(sa, payer)) tapped.add(c);
             }
         }
         if (!tapped.isEmpty()) {
@@ -543,7 +546,7 @@ public class CostAdjustment {
                         if (st.hasParam("ValidCard")) {
                             list = CardUtil.getThisTurnCast(st.getParam("ValidCard"), hostCard, st, controller);
                         } else {
-                            list = game.getStack().getSpellsCastThisTurn();
+                            list = game.getStack().getSpellCardsCastThisTurn();
                         }
 
                         if (st.hasParam("ValidSpell")) {

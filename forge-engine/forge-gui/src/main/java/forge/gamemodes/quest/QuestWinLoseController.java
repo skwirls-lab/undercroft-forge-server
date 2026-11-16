@@ -1,6 +1,5 @@
 package forge.gamemodes.quest;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import forge.LobbyPlayer;
 import forge.card.CardEdition;
@@ -36,6 +35,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map.Entry;
+import java.util.stream.Collectors;
 
 public class QuestWinLoseController {
     private final GameView lastGame;
@@ -507,7 +507,6 @@ public class QuestWinLoseController {
 
         String title;
         if (qData.getFormat() == null) {
-
             final List<GameFormat> formats = new ArrayList<>();
             final String preferredFormat = FModel.getQuestPreferences().getPref(QPref.BOOSTER_FORMAT);
 
@@ -528,9 +527,7 @@ public class QuestWinLoseController {
             qData.getCards().addAllCards(cardsWon);
 
             title = Localizer.getInstance().getMessage("lblBonusFormatBoosterPack", selected.getName());
-
         } else {
-
             final List<String> sets = new ArrayList<>();
 
             for (final SealedTemplate bd : FModel.getMagicDb().getBoosters()) {
@@ -575,7 +572,7 @@ public class QuestWinLoseController {
             final CardEdition chooseEd = SGuiChoose.one(Localizer.getInstance().getMessage("lblChooseBonusBoosterSet"), options);
 
             if (customBooster) {
-                List<PaperCard> cards = FModel.getMagicDb().getCommonCards().getAllCards(PaperCardPredicates.printedInSet(chooseEd.getCode()));
+                List<PaperCard> cards = FModel.getQuest().getAllAllowedCards().filter(PaperCardPredicates.printedInSet(chooseEd.getCode())).collect(Collectors.toList());
                 final IUnOpenedProduct product = new UnOpenedProduct(getBoosterTemplate(), cards);
                 cardsWon = product.get();
             } else {
@@ -593,7 +590,6 @@ public class QuestWinLoseController {
 
             qData.getCards().addAllCards(cardsWon);
             title = Localizer.getInstance().getMessage("lblBonusSetBoosterPack", chooseEd.getName());
-
         }
 
         if (cardsWon != null) {
@@ -603,7 +599,7 @@ public class QuestWinLoseController {
     }
 
     private SealedTemplate getBoosterTemplate() {
-        return new SealedTemplate(ImmutableList.of(
+        return new SealedTemplate(List.of(
                 Pair.of(BoosterSlots.COMMON, FModel.getQuestPreferences().getPrefInt(QPref.BOOSTER_COMMONS)),
                 Pair.of(BoosterSlots.UNCOMMON, FModel.getQuestPreferences().getPrefInt(QPref.BOOSTER_UNCOMMONS)),
                 Pair.of(BoosterSlots.RARE_MYTHIC, FModel.getQuestPreferences().getPrefInt(QPref.BOOSTER_RARES))

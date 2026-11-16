@@ -42,7 +42,32 @@ import java.util.*;
 
 public abstract class SpellAbilityEffect {
 
-    public abstract void resolve(SpellAbility sa);
+    public void resolve(SpellAbility sa) {}
+
+    /**
+     * CR 605.1a: an activated ability is not a mana ability if its cost or effect moves any
+     * card to or from a library. Effects that can do so override this to return true.
+     *
+     * This is deliberately a question about the ability's script and not about the current game
+     * state: CR 605.1a says to disregard replacement effects other than self-replacement effects
+     * when evaluating the criteria, so whether an ability is a mana ability must not depend on
+     * what happens to be on the battlefield.
+     */
+    public boolean movesCardToOrFromLibrary(final SpellAbility sa) {
+        return false;
+    }
+
+    /**
+     * True when the given zone parameter names the library, e.g. Origin$ Graveyard,Library.
+     *
+     * Origin$ All counts too, since listValueOf expands it to every zone, the library included.
+     */
+    protected static boolean zoneParamIsLibrary(final SpellAbility sa, final String param) {
+        if (!sa.hasParam(param)) {
+            return false;
+        }
+        return ZoneType.listValueOf(sa.getParam(param)).contains(ZoneType.Library);
+    }
 
     protected String getStackDescription(final SpellAbility sa) {
         // Unless overridden, let the spell description also be the stack description
@@ -246,6 +271,7 @@ public abstract class SpellAbilityEffect {
     private static CardCollection getCards(final boolean definedFirst, final String definedParam, final SpellAbility sa) {
         return getCards(definedFirst, definedParam, sa, null);
     }
+
     private static CardCollection getCards(final boolean definedFirst, final String definedParam, final SpellAbility sa, List<Card> resultDuplicate) {
         if (sa.hasParam("ThisDefinedAndTgts")) {
             CardCollection cards = AbilityUtils.getDefinedCards(sa.getHostCard(), sa.getParam("ThisDefinedAndTgts"), sa);
@@ -276,11 +302,9 @@ public abstract class SpellAbilityEffect {
         if (resultUnique == null)
             return null;
         if (sa.hasParam("IncludeAllComponentCards")) {
-            CardCollection components = new CardCollection();
             for (Card c : resultUnique) {
-                components.addAll(c.getAllComponentCards(false));
+                resultUnique.addAll(c.getAllComponentCards(false));
             }
-            resultUnique.addAll(components);
         }
         return resultUnique;
     }
@@ -291,6 +315,18 @@ public abstract class SpellAbilityEffect {
     protected final static PlayerCollection getDefinedPlayersOrTargeted(final SpellAbility sa) {                            return getPlayers(true,  "Defined",    sa); }
     protected final static PlayerCollection getDefinedPlayersOrTargeted(final SpellAbility sa, final String definedParam) { return getPlayers(true,  definedParam, sa); }
 
+    /** The target players, one per team under shared team turns: one effect adds or skips a turn, phase or step for a team only once (CR 805.8). */
+    protected final static PlayerCollection getTargetPlayersOnePerTeam(final SpellAbility sa) {
+        final PlayerCollection players = new PlayerCollection();
+        for (final Player p : getTargetPlayers(sa)) {
+            if (!players.anyMatch(p::sharesTeamWith)) {
+                players.add(p);
+            }
+        }
+        return players;
+    }
+
+    // should really only be used by effects that need it to avoid overhead
     protected static List<Player> getTargetPlayersWithDuplicates(final boolean definedFirst, final String definedParam, final SpellAbility sa) {
         List<Player> result = Lists.newArrayList();
         getPlayers(definedFirst, definedParam, sa, result);
@@ -302,7 +338,6 @@ public abstract class SpellAbilityEffect {
         return getPlayers(definedFirst, definedParam, sa, null);
     }
     private static PlayerCollection getPlayers(final boolean definedFirst, final String definedParam, final SpellAbility sa, List<Player> resultDuplicate) {
-        Game game = sa.getHostCard().getGame();
         PlayerCollection resultUnique = null;
         final boolean useTargets = sa.usesTargeting() && (!definedFirst || !sa.hasParam(definedParam));
         if (useTargets) {
@@ -324,14 +359,18 @@ public abstract class SpellAbilityEffect {
             }
         }
 
-        // try sort in APNAP order
+        sortAPNAP(sa, resultDuplicate);
+        return resultUnique;
+    }
+
+    protected static void sortAPNAP(final SpellAbility sa, final List<Player> players) {
+        final Game game = sa.getHostCard().getGame();
         Player starter = game.getPhaseHandler().getPlayerTurn();
         if (sa.hasParam("StartingWith")) {
             starter = AbilityUtils.getDefinedPlayers(sa.getHostCard(), sa.getParam("StartingWith"), sa).getFirst();
         }
         PlayerCollection ordered = game.getPlayersInTurnOrder(starter);
-        resultDuplicate.sort(Comparator.comparingInt(ordered::indexOf));
-        return resultUnique;
+        players.sort(Comparator.comparingInt(ordered::indexOf));
     }
 
     // Spells
@@ -523,7 +562,7 @@ public abstract class SpellAbilityEffect {
     public static void addForgetOnMovedTrigger(final Card card, final String zone) {
         String trig = "Mode$ ChangesZone | ValidCard$ Card.IsRemembered | Origin$ " + zone + " | ExcludedDestinations$ Stack,Exile | Destination$ Any | TriggerZones$ Command | Static$ True";
         // CR 400.8 Exiled card becomes new object when it's exiled
-        String trig2 = "Mode$ Exiled | ValidCard$ Card.IsRemembered | ValidCause$ SpellAbility.!EffectSource | TriggerZones$ Command | Static$ True";
+        String trig2 = "Mode$ Exiled | ValidCard$ Card.IsRemembered | ValidCause$ SpellAbility.!EffectSourceAbility | TriggerZones$ Command | Static$ True";
 
         final Trigger parsedTrigger = TriggerHandler.parseTrigger(trig, card, true);
         final Trigger parsedTrigger2 = TriggerHandler.parseTrigger(trig2, card, true);
@@ -536,7 +575,6 @@ public abstract class SpellAbilityEffect {
 
     protected static void addForgetOnCastTrigger(final Card card, String valid) {
         String trig = "Mode$ SpellCast | TriggerZones$ Command | Static$ True | ValidCard$ " + valid;
-
         final Trigger parsedTrigger = TriggerHandler.parseTrigger(trig, card, true);
         parsedTrigger.setOverridingAbility(getForgetSpellAbility(card));
         card.addTrigger(parsedTrigger);
@@ -558,7 +596,6 @@ public abstract class SpellAbilityEffect {
 
     protected static void addForgetOnPhasedInTrigger(final Card card) {
         String trig = "Mode$ PhaseIn | ValidCard$ Card.IsRemembered | TriggerZones$ Command | Static$ True";
-
         final Trigger parsedTrigger = TriggerHandler.parseTrigger(trig, card, true);
         parsedTrigger.setOverridingAbility(getForgetSpellAbility(card));
         card.addTrigger(parsedTrigger);
@@ -742,7 +779,7 @@ public abstract class SpellAbilityEffect {
         final Combat combat = game.getCombat();
 
         // CR 506.3b
-        if (sa.hasParam(attackingParam) && combat.getAttackingPlayer().equals(c.getController())) {
+        if (sa.hasParam(attackingParam) && combat.getAttackingPlayer().sharesTeamWith(c.getController())) {
             String attacking = sa.getParam(attackingParam);
 
             GameEntity defender = null;
@@ -814,7 +851,8 @@ public abstract class SpellAbilityEffect {
 
         final Card hostCard = sa.getHostCard();
         final Game game = hostCard.getGame();
-        hostCard.addUntilLeavesBattlefield(triggerList.allCards());
+        // tokens cease to exist once exiled and never return, and nothing ever cleans them from this list
+        hostCard.addUntilLeavesBattlefield(CardLists.filter(triggerList.allCards(), CardPredicates.NON_TOKEN));
         final TriggerHandler trigHandler = game.getTriggerHandler();
 
         final Card lki;
@@ -890,30 +928,33 @@ public abstract class SpellAbilityEffect {
         }
     }
 
-    protected static void discard(SpellAbility sa, final boolean effect, Map<Player, CardCollectionView> discardedMap, Map<AbilityKey, Object> params) {
-        Set<Player> discarders = discardedMap.keySet();
+    protected static void discard(SpellAbility sa, final boolean effect, Map<Player, CardCollectionView> toDiscardMap, Map<AbilityKey, Object> params) {
         Map<Player, List<Card>> discardedBefore = Maps.newHashMap();
-        for (Player p : discarders) {
-            discardedBefore.put(p, Lists.newArrayList(p.getDiscardedThisTurn()));
+        Map<Player, CardCollectionView> discardedMap = Maps.newLinkedHashMap();
+        for (Map.Entry<Player, CardCollectionView> e : toDiscardMap.entrySet()) {
+            discardedBefore.put(e.getKey(), Lists.newArrayList(e.getKey().getDiscardedThisTurn()));
             final CardCollection discardedByPlayer = new CardCollection();
-            for (Card card : Lists.newArrayList(discardedMap.get(p))) { // without copying will get concurrent modification exception
+            // iterate a copy: the view may be a live zone list (e.g. whole hand) that discard() mutates
+            for (Card card : e.getValue().threadSafeIterable()) {
                 if (card == null) { continue; }
-                Card moved = p.discard(card, sa, effect, params);
+                Card moved = e.getKey().discard(card, sa, effect, params);
                 if (moved != null) {
                     discardedByPlayer.add(moved);
                 }
             }
-            discardedMap.put(p, discardedByPlayer);
+            discardedMap.put(e.getKey(), discardedByPlayer);
         }
 
-        for (Player p : discarders) {
-            CardCollectionView discardedByPlayer = discardedMap.get(p);
-            if (!discardedByPlayer.isEmpty()) {
-                final Map<AbilityKey, Object> runParams = AbilityKey.mapFromPlayer(p);
-                runParams.put(AbilityKey.Cards, discardedByPlayer);
+        for (Map.Entry<Player, CardCollectionView> e : discardedMap.entrySet()) {
+            if (!e.getValue().isEmpty()) {
+                final Map<AbilityKey, Object> runParams = AbilityKey.mapFromPlayer(e.getKey());
+                runParams.put(AbilityKey.Cards, e.getValue());
                 runParams.put(AbilityKey.Cause, sa);
-                runParams.put(AbilityKey.DiscardedBefore, discardedBefore.get(p));
-                p.getGame().getTriggerHandler().runTrigger(TriggerType.DiscardedAll, runParams, false);
+                runParams.put(AbilityKey.DiscardedBefore, discardedBefore.get(e.getKey()));
+                if (params.containsKey(AbilityKey.Random)) {
+                    runParams.put(AbilityKey.Random, params.get(AbilityKey.Random));
+                }
+                e.getKey().getGame().getTriggerHandler().runTrigger(TriggerType.DiscardedAll, runParams, false);
             }
         }
     }

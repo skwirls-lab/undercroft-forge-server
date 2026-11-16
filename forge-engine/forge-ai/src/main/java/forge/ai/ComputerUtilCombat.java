@@ -49,6 +49,7 @@ import forge.util.MyRandom;
 import forge.util.TextUtil;
 import forge.util.collect.FCollection;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -298,7 +299,7 @@ public class ComputerUtilCombat {
         int damage = 0;
 
         if (ai.canLoseLife()) {
-            final List<Card> attackers = combat.getAttackersOf(ai);
+            final List<Card> attackers = attackersOfTeam(ai, combat);
             final List<Card> unblocked = Lists.newArrayList();
 
             for (final Card attacker : attackers) {
@@ -339,7 +340,7 @@ public class ComputerUtilCombat {
 
         int poison = 0;
 
-        final List<Card> attackers = combat.getAttackersOf(ai);
+        final List<Card> attackers = attackersOfTeam(ai, combat);
         final List<Card> unblocked = Lists.newArrayList();
 
         for (final Card attacker : attackers) {
@@ -364,12 +365,34 @@ public class ComputerUtilCombat {
         return ai.getPoisonCounters() + poison;
     }
 
+    /** The attackers whose damage reaches this player's life total: those attacking them, and in Two-Headed Giant those attacking a teammate (CR 810.4). */
+    private static List<Card> attackersOfTeam(final Player ai, final Combat combat) {
+        final CardCollection attackers = new CardCollection();
+        for (final Player p : ai.getSharedTeam()) {
+            attackers.addAll(combat.getAttackersOf(p));
+        }
+        return attackers;
+    }
+
     public static List<Card> getLifeThreateningCommanders(final Player ai, final Combat combat) {
         List<Card> res = Lists.newArrayList();
-        for (Card c : combat.getAttackers()) {
-            if (c.isCommander() && combat.isAttacking(c, ai)) {
+        for (Card c : combat.getAttackersOf(ai)) {
+            if (c.isCommander()) {
+                CardCollection blockers = combat.getBlockers(c);
                 int currentCommanderDamage = ai.getCommanderDamage(c);
-                if (damageIfUnblocked(c, ai, combat, false) + currentCommanderDamage >= 21) {
+                if (currentCommanderDamage >= 21) {
+                    // if a loss gets delayed there's no point to check for more
+                    return Collections.emptyList();
+                }
+                if (c.hasKeyword(Keyword.TRAMPLE)) {
+                    int dmgAfterShielding = getAttack(c) - totalShieldDamage(c, blockers);
+                    if (dmgAfterShielding > 0) {
+                        currentCommanderDamage += dmgAfterShielding;
+                    }
+                } else if (blockers.isEmpty()) {
+                    currentCommanderDamage += damageIfUnblocked(c, ai, combat, false);
+                }
+                if (currentCommanderDamage >= 21) {
                     res.add(c);
                 }
             }
@@ -391,7 +414,7 @@ public class ComputerUtilCombat {
     }
     public static boolean lifeInDanger(final Player ai, final Combat combat, final int payment) {
         // life in danger only cares about the player's life. Not Planeswalkers' life
-        if (ai.cantLose() || combat == null || combat.getAttackingPlayer() == ai) {
+        if (ai.cantLose() || combat == null || ai.sharesTeamWith(combat.getAttackingPlayer())) {
             return false;
         }
 
@@ -408,7 +431,7 @@ public class ComputerUtilCombat {
         }
 
         // check for creatures that must be blocked
-        final List<Card> attackers = combat.getAttackersOf(ai);
+        final List<Card> attackers = attackersOfTeam(ai, combat);
 
         final List<Card> threateningCommanders = getLifeThreateningCommanders(ai, combat);
 
@@ -474,7 +497,7 @@ public class ComputerUtilCombat {
         final List<Card> threateningCommanders = getLifeThreateningCommanders(ai, combat);
 
         // check for creatures that must be blocked
-        final List<Card> attackers = combat.getAttackersOf(ai);
+        final List<Card> attackers = attackersOfTeam(ai, combat);
 
         for (final Card attacker : attackers) {
             final List<Card> blockers = combat.getBlockers(attacker);
@@ -745,6 +768,14 @@ public class ComputerUtilCombat {
             }
         }
 
+        TriggerType mode = trigger.getMode();
+        // every other mode ends in false below; the requirements check runs a
+        // valid-card filter per trigger on the battlefield per attacker-blocker pair
+        if (mode != TriggerType.Attacks && mode != TriggerType.AttackerUnblocked && mode != TriggerType.Blocks
+                && mode != TriggerType.AttackerBlocked && mode != TriggerType.AttackerBlockedByCreature
+                && mode != TriggerType.DamageDone) {
+            return false;
+        }
         if (!trigger.zonesCheck(game.getZoneOf(trigger.getHostCard()))) {
             return false;
         }
@@ -752,7 +783,6 @@ public class ComputerUtilCombat {
             return false;
         }
 
-        TriggerType mode = trigger.getMode();
         if (mode == TriggerType.Attacks) {
             willTrigger = true;
             if (combat.isAttacking(attacker)) {
@@ -2228,9 +2258,18 @@ public class ComputerUtilCombat {
         int restDamage = damage;
 
         restDamage = target.staticReplaceDamage(restDamage, source, isCombat);
-        restDamage = target.staticDamagePrevention(restDamage, possiblePrevention, source, isCombat);
+        restDamage = target.staticDamagePrevention(restDamage, possiblePrevention, source, isCombat,
+                isCombat ? isCombatDamagePreventedThisTurnCached(target.getGame()) : null);
 
         return restDamage;
+    }
+
+    // cached per AI decision (AiCache is cleared in chooseSpellAbilityToPlay);
+    // predictions ask this once per attacker otherwise
+    private static Boolean isCombatDamagePreventedThisTurnCached(final Game game) {
+        return AiCache.getCached("isPreventCombatDamageThisTurn",
+                () -> game.getReplacementHandler().isPreventCombatDamageThisTurn(),
+                List.of(AiCache::identity), game);
     }
 
     public final static boolean dealsFirstStrikeDamage(final Card combatant, final boolean withoutAbilities, final Combat combat) {
@@ -2278,7 +2317,18 @@ public class ComputerUtilCombat {
 	                continue;
 	            }
 	
-	            if (!ability.hasParam("KW") || !ComputerUtilCost.canPayCost(ability, controller, false)) {
+	            if (!ability.hasParam("KW")) {
+	                continue;
+	            }
+	            // keyword match first, canPayCost last
+	            boolean grants = false;
+	            for (String keyword : keywords) {
+	            	if (ability.getParam("KW").contains(keyword)) {
+	            		grants = true;
+	            		break;
+	            	}
+	            }
+	            if (!grants) {
 	                continue;
 	            }
 	            if (c != combatant) {
@@ -2293,10 +2343,8 @@ public class ComputerUtilCombat {
 	            	}
 
 	            }
-	            for (String keyword : keywords) {
-	            	if (ability.getParam("KW").contains(keyword)) {
-	            		return true;
-	            	}
+	            if (ComputerUtilCost.canPayCost(ability, controller, false)) {
+	                return true;
 	            }
 	        }
     	}
@@ -2428,7 +2476,7 @@ public class ComputerUtilCombat {
         }
 
         int life = ai.getLife();
-        int poisonLife = 10 - ai.getPoisonCounters();
+        int poisonLife = ai.getGame().getRules().getPoisonCountersToLose() - ai.getPoisonCounters();
         double percentLife = life * 1.0 / damageScore;
         double percentPoison = poisonLife * 1.0 / poisonScore;
 
@@ -2456,8 +2504,7 @@ public class ComputerUtilCombat {
                 if (exec.getApi() == ApiType.Clone && "Self".equals(exec.getParam("CloneTarget"))
                         && exec.hasParam("ValidTgts") && exec.getParam("ValidTgts").contains("Creature")
                         && exec.getParam("ValidTgts").contains("attacking")) {
-                    // Tilonalli's Skinshifter and potentially other similar cards that can clone other stuff
-                    // while attacking
+                    // Tilonalli's Skinshifter and potentially other similar cards that can clone other stuff while attacking
                     if (exec.getParam("ValidTgts").contains("nonLegendary") && attacker.getType().isLegendary()) {
                         continue;
                     }

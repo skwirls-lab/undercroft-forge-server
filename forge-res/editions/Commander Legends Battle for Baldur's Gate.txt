@@ -6,6 +6,9 @@ Type=Draft
 Booster=13 Common:fromSheet("CLB cards"), 3 Uncommon:fromSheet("CLB cards"), 1 RareMythic:!fromSheet("CLB legends"):fromSheet("CLB cards"), 1 fromSheet("CLB foils"), 1 fromSheet("CLB backgrounds"), 1 fromSheet("CLB legends")
 Foil=NotSupported
 DoublePick=Always
+DraftType=Commander
+DraftFreeCommander=Faceless One
+MaxMatchPlayers=4
 ScryfallCode=CLB
 
 [cards]
@@ -785,7 +788,7 @@ ScryfallCode=CLB
 760 C Malakir Blood-Priest @Scott Murphy
 761 R Mardu Strike Leader @Jason Rainville
 762 R Mindblade Render @Mitchell Malloy
-763 R Nighthawk Scavenger @Heonhwa Choe
+763 R Nighthawk Scavenger @Heonhwa
 764 R Nighthowler @Nils Hamm
 765 R Nihilith @Dave Allsop
 766 C Phyrexian Rager @Stephan Martiniere

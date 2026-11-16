@@ -2,11 +2,10 @@ package forge.gamemodes.match.input;
 
 import com.google.common.collect.Iterables;
 import forge.game.GameEntity;
-import forge.game.card.Card;
+import forge.game.GameEntityView;
 import forge.game.card.CardView;
-import forge.game.player.Player;
-import forge.game.player.PlayerView;
 import forge.game.spellability.SpellAbility;
+import forge.gamemodes.match.Selection;
 import forge.localinstance.properties.ForgePreferences;
 import forge.model.FModel;
 import forge.player.PlayerControllerHuman;
@@ -90,12 +89,10 @@ public abstract class InputSelectManyBase<T extends GameEntity> extends InputSyn
             }
             sb.append("\n").append(getMessage());
             showMessage(sb.toString(), card);
+        } else if (card != null) {
+            showMessage(getMessage(), card);
         } else {
-            if (card != null) { 
-                showMessage(getMessage(), card);
-            } else {
-                showMessage(getMessage());
-            }
+            showMessage(getMessage());
         }
         getController().getGui().updateButtons(getOwner(), hasEnoughTargets(), allowCancel, true);
     }
@@ -103,7 +100,6 @@ public abstract class InputSelectManyBase<T extends GameEntity> extends InputSyn
     @Override
     protected void onCancel() {
         bCancelled = true;
-        resetUsedToPay();
         this.getSelected().clear();
         this.stop();
     }
@@ -117,7 +113,10 @@ public abstract class InputSelectManyBase<T extends GameEntity> extends InputSyn
 
     @Override
     protected final void onOk() {
-        resetUsedToPay();
+        // The button is disabled until enough is chosen, but a remote client can still send the press
+        if (!hasEnoughTargets()) {
+            return;
+        }
         this.stop();
     }
 
@@ -125,24 +124,9 @@ public abstract class InputSelectManyBase<T extends GameEntity> extends InputSyn
         this.message = message0;
     }
 
-    protected void onSelectStateChanged(final GameEntity c, final boolean newState) {
-        if (c instanceof Card) {
-            getController().getGui().setUsedToPay(CardView.get((Card) c), newState); // UI supports card highlighting though this abstraction-breaking mechanism
-        }
-        else if (c instanceof Player) {
-            getController().getGui().setHighlighted(PlayerView.get((Player) c), newState);
-        }
-    }
-
-    private void resetUsedToPay() {
-        for (final GameEntity c : getSelected()) {
-            if (c instanceof Card) {
-                getController().getGui().setUsedToPay(CardView.get((Card) c), false);
-            }
-            else if (c instanceof Player) {
-                getController().getGui().setHighlighted(PlayerView.get((Player) c), false);
-            }
-        }
+    @Override
+    protected Selection getSelection() {
+        return Selection.ofChosen(GameEntityView.getEntityCollection(getSelected()));
     }
 
     public final void setCancelAllowed(boolean allow) {

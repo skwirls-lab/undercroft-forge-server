@@ -24,6 +24,11 @@ import forge.util.TextUtil;
 public class ChangeZoneAllEffect extends SpellAbilityEffect {
 
     @Override
+    public boolean movesCardToOrFromLibrary(final SpellAbility sa) {
+        return zoneParamIsLibrary(sa, "Origin") || zoneParamIsLibrary(sa, "Destination");
+    }
+
+    @Override
     public void buildSpellAbility(SpellAbility sa) {
         super.buildSpellAbility(sa);
         AbilityFactory.adjustChangeZoneTarget(sa.getMapParams(), sa);
@@ -72,7 +77,8 @@ public class ChangeZoneAllEffect extends SpellAbilityEffect {
                 message = Localizer.getInstance().getMessage("lblMoveTargetFromOriginToDestination", targets, Lang.joinHomogenous(origin, ZoneType::getTranslatedName), destination.getTranslatedName());
             }
 
-            if (!sa.getActivatingPlayer().getController().confirmAction(sa, null, message, null)) {
+            final Card cardToShow = cards.size() == 1 ? cards.get(0) : null;
+            if (!sa.getActivatingPlayer().getController().confirmAction(sa, null, message, cardToShow, null)) {
                 return;
             }
         }
@@ -209,4 +215,5 @@ public class ChangeZoneAllEffect extends SpellAbilityEffect {
             }
         }
     }
+
 }

@@ -26,11 +26,16 @@ public interface IDeviceAdapter {
     void exit();
     void closeSplashScreen();
     void convertToJPEG(InputStream input, OutputStream output) throws IOException;
+    void convertToPNG(InputStream input, OutputStream output) throws IOException;
     Pair<Integer, Integer> getRealScreenSize(boolean real);
     ArrayList<String> getGamepads();
     UpnpServiceConfiguration getUpnpPlatformService();
     boolean needFileAccess();
     void requestFileAcces();
+
+    /** Confine the mouse cursor to the window (desktop LibGDX only). Default no-op. */
+    default void setMouseConfined(boolean confined) {
+    }
 
     Set<String> LWJGL_SUPPORTED_AUDIO_TYPES = Set.of(".wav", ".mp3", ".ogg");
     default boolean isSupportedAudioFormat(File file) {

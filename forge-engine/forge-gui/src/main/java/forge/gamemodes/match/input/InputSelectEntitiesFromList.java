@@ -1,6 +1,7 @@
 package forge.gamemodes.match.input;
 
 import forge.game.GameEntity;
+import forge.game.GameEntityView;
 import forge.game.ability.AbilityUtils;
 import forge.game.ability.ApiType;
 import forge.game.card.Card;
@@ -11,11 +12,9 @@ import forge.game.cost.CostTapType;
 import forge.game.keyword.Keyword;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
-import forge.game.zone.Zone;
-import forge.gui.FThreads;
+import forge.gamemodes.match.Selection;
 import forge.player.PlayerControllerHuman;
-import forge.player.PlayerZoneUpdate;
-import forge.player.PlayerZoneUpdates;
+import forge.trackable.TrackableObject;
 import forge.util.ITriggerEvent;
 import forge.util.Localizer;
 import forge.util.TextUtil;
@@ -31,7 +30,6 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
 
     private final FCollectionView<T> validChoices;
     protected final FCollection<T> selected = new FCollection<>();
-    protected Iterable<PlayerZoneUpdate> zonesShown; // want to hide these zones when input done
     protected MassSelectMode massSelectMode = null;
 
     public InputSelectEntitiesFromList(final PlayerControllerHuman controller, final int min, final int max, final FCollectionView<T> validChoices0) {
@@ -48,31 +46,33 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
         if (min > validChoices.size()) { // pfps does this really do anything useful??
             System.out.printf("Trying to choose at least %d things from a list with only %d things!%n", min, validChoices.size());
         }
-        ArrayList<CardView> vCards = new ArrayList<>();
-        for (T v : validChoices0) {
-            if (v instanceof Card c) {
-                vCards.add(c.getView());
-            }
-        }
-        getController().getGui().setSelectables(vCards);
-        final PlayerZoneUpdates zonesToUpdate = new PlayerZoneUpdates();
-        for (final GameEntity ge : validChoices) {
-            final Zone cz = ge instanceof Card c ? c.getLastKnownZone() : null;
-            if (cz != null) {
-                zonesToUpdate.add(new PlayerZoneUpdate(cz.getPlayer().getView(), cz.getZoneType()));
-            }
-        }
-        FThreads.invokeInEdtNowOrLater(() -> {
-            getController().getGui().updateZones(zonesToUpdate);
-            zonesShown = getController().getGui().tempShowZones(controller.getPlayer().getView(), zonesToUpdate);
-        });
     }
-    
+
+    @Override
+    protected Selection getSelection() {
+        final List<CardView> cards = new ArrayList<>();
+        final List<TrackableObject> players = new ArrayList<>();
+        for (T v : validChoices) {
+            if (v instanceof Card c) {
+                cards.add(c.getView());
+            } else if (v instanceof Player p) {
+                players.add(p.getView());
+            }
+        }
+        return new Selection(cards, min, max, players, new ArrayList<>(GameEntityView.getEntityCollection(selected)), List.of());
+    }
+
     @Override
     protected boolean onCardSelected(final Card c, final List<Card> otherCardsToSelect, final ITriggerEvent triggerEvent) {
         if (!selectEntity(c)) {
             return false;
         }
+        if (otherCardsToSelect != null) {
+            for (final Card other : otherCardsToSelect) {
+                selectEntity(other);
+            }
+        }
+        showSelection();
         refresh();
         return true;
     }
@@ -93,12 +93,17 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
         if (!selectEntity(p)) {
             return;
         }
+        showSelection();
         refresh();
     }
 
     @Override
     public final Collection<T> getSelected() {
         return selected;
+    }
+
+    public final FCollectionView<T> getValidChoices() {
+        return validChoices;
     }
 
     @SuppressWarnings("unchecked")
@@ -113,7 +118,6 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
         } else {
             selected.add((T)c);
         }
-        onSelectStateChanged(c, !entityWasSelected);
 
         return true;
     }
@@ -154,13 +158,6 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
         }
 
         return msg.toString();
-    }
-
-    @Override
-    protected void onStop() {
-        getController().getGui().hideZones(getController().getPlayer().getView(),zonesShown);  
-        getController().getGui().clearSelectables();
-        super.onStop();
     }
 
     /**
@@ -204,9 +201,6 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
             massSelectMode = massSelectMode.next();
             updateMassSelectButton();
             // Remove all current selections
-            this.getSelected().forEach(selected -> {
-                onSelectStateChanged(selected, false);
-            });
             this.getSelected().clear();
             if (massSelectMode == MassSelectMode.MINE) { // Select all valid targets owned by player
                 for (T v : validChoices) {
@@ -216,7 +210,6 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
                     if (v instanceof Card c) {
                         if (c.getController().equals(getController().getPlayer())) {
                             selected.add(v);
-                            onSelectStateChanged(v, true);
                         }
                     }
                 }
@@ -226,9 +219,9 @@ public class InputSelectEntitiesFromList<T extends GameEntity> extends InputSele
                         break;
                     }
                     selected.add(c);
-                    onSelectStateChanged(c, true);
                 }
             }
+            showSelection();
         }
     }
 }

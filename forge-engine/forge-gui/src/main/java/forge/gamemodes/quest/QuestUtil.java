@@ -164,6 +164,7 @@ public class QuestUtil {
      * readExtraCard.
      * </p>
      * Creates single card for a string read from unique event properties.
+     * Used for creating the starting cards on the battlefield
      *
      * @param name
      *            the name
@@ -570,9 +571,9 @@ public class QuestUtil {
         }
 
         if (useBazaar) {
-            humanStart.setCardsOnBattlefield(QuestUtil.getHumanStartingCards(qData, event));
+            humanStart.addExtraCardsOnBattlefield(QuestUtil.getHumanStartingCards(qData, event));
             aiStart.setStartingLife(lifeAI);
-            aiStart.setCardsOnBattlefield(QuestUtil.getComputerStartingCards(event));
+            aiStart.addExtraCardsOnBattlefield(QuestUtil.getComputerStartingCards(event));
         }
 
         final List<RegisteredPlayer> starter = new ArrayList<>();
@@ -723,4 +724,4 @@ public class QuestUtil {
         }
     }
 
-} // QuestUtil
+}

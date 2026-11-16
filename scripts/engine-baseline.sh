@@ -26,7 +26,11 @@ MANIFEST="forge-engine/ENGINE_BASELINE.txt"
 generate() {
   local list
   list="$(mktemp)"
-  git ls-files --cached --others --exclude-standard -- "${MODULES[@]}" | sort > "$list"
+  # --cached still lists a tracked file that has been deleted from disk (an upgrade removes
+  # whole modules before copying new ones in, and nothing is committed yet), so keep only
+  # paths that exist: the manifest describes the tree, not the index.
+  git ls-files --cached --others --exclude-standard -- "${MODULES[@]}" | sort -u \
+    | while IFS= read -r f; do [ -f "$f" ] && printf '%s\n' "$f"; done > "$list"
   if [ ! -s "$list" ]; then
     echo "ERROR: no engine files found — wrong working directory?" >&2
     rm -f "$list"

@@ -11,7 +11,9 @@ public enum CardSplitType
     Flip(FaceSelectionMethod.USE_PRIMARY_FACE, CardStateName.Flipped),
     Adventure(FaceSelectionMethod.USE_PRIMARY_FACE, CardStateName.Secondary),
     Omen(FaceSelectionMethod.USE_PRIMARY_FACE, CardStateName.Secondary),
+    Vengeance(FaceSelectionMethod.USE_PRIMARY_FACE, CardStateName.Secondary),
     Modal(FaceSelectionMethod.USE_ACTIVE_FACE, CardStateName.Backside),
+    Prepare(FaceSelectionMethod.USE_ACTIVE_FACE, CardStateName.PreparedSpell),
     Specialize(FaceSelectionMethod.USE_ACTIVE_FACE, null);
 
     public static final EnumSet<CardSplitType> DUAL_FACED_CARDS = EnumSet.of(

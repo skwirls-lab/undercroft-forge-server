@@ -3,7 +3,6 @@ Code=2X2
 Date=2022-07-08
 Name=Double Masters 2022
 Type=Reprint
-BoosterCovers=3
 Booster=8 Common:fromSheet("2X2 cards"), 3 Uncommon:fromSheet("2X2 cards"), 2 RareMythic:fromSheet("2X2 cards"), 2 fromSheet("2X2 foils"), 1 fromSheet("2X2 spire")
 Foil=NotSupported
 DoublePick=FirstPick
@@ -80,7 +79,7 @@ ScryfallCode=2X2
 67 U Wash Out @Steven Belledin
 68 C Balustrade Spy @Jaime Jones
 69 M Bitterblossom @Rebecca Guay
-70 U Blood Artist @LA Draws
+70 U Blood Artist @L.A. Draws
 71 C Bloodflow Connoisseur @Slawomir Maniak
 72 C Carrier Thrall @Lius Lasahido
 73 R Damnation @Kev Walker

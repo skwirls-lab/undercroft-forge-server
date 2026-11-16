@@ -1,6 +1,6 @@
 package forge.gamemodes.net.event;
 
-import forge.gamemodes.net.server.RemoteClient;
+import forge.util.LogSafe;
 
 public class LogoutEvent implements NetEvent {
     private static final long serialVersionUID = -8262613254026625787L;
@@ -10,11 +10,12 @@ public class LogoutEvent implements NetEvent {
         this.username = username;
     }
 
-    @Override
-    public void updateForClient(final RemoteClient client) {
-    }
-
     public String getUsername() {
         return username;
+    }
+
+    @Override
+    public String toString() {
+        return "Logout: " + LogSafe.forLog(username);
     }
 }

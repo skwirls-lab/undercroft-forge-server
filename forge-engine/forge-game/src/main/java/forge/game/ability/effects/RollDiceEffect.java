@@ -7,6 +7,7 @@ import forge.game.ability.AbilityUtils;
 import forge.game.ability.SpellAbilityEffect;
 import forge.game.card.*;
 import forge.game.cost.Cost;
+import forge.game.event.GameEventRollDice;
 import forge.game.event.GameEventRollDie;
 import forge.game.player.Player;
 import forge.game.player.PlayerCollection;
@@ -49,14 +50,14 @@ public class RollDiceEffect extends SpellAbilityEffect {
             this.naturalValue = naturalValue;
             this.modifiedValue = modifiedValue;
         }
-        // Getters
+
         public int getNaturalValue() {
             return naturalValue;
         }
         public int getModifiedValue() {
             return modifiedValue;
         }
-        // Setters
+
         public void setNaturalValue(int naturalValue) {
             this.naturalValue = naturalValue;
         }
@@ -160,7 +161,7 @@ public class RollDiceEffect extends SpellAbilityEffect {
             int activationsThisTurn = Integer.parseInt(parts[1]);
             SpellAbility modifierSA = c.getFirstSpellAbility();
             Cost cost = new Cost(c.getSVar("RollRerollCost"), false);
-            boolean paid = player.getController().payCostDuringRoll(cost, modifierSA, null);
+            boolean paid = player.getController().payCostDuringRoll(cost, modifierSA);
             if (paid) {
                 for (Integer roll : diceToReroll) {
                     naturalRolls.remove(roll);
@@ -201,7 +202,7 @@ public class RollDiceEffect extends SpellAbilityEffect {
                     SpellAbility modifierSA = c.getFirstSpellAbility();
                     String costString = c.getSVar("RollModifyCost");
                     Cost cost = new Cost(costString, false);
-                    boolean paid = player.getController().payCostDuringRoll(cost, modifierSA,  null);
+                    boolean paid = player.getController().payCostDuringRoll(cost, modifierSA);
                     if (paid) {
                         message = Localizer.getInstance().getMessage("lblChooseRollIncrement", rollToModify);
                         boolean isPositive = player.getController().chooseBinary(sa, message, PlayerController.BinaryChoiceType.IncreaseOrDecrease);
@@ -314,7 +315,7 @@ public class RollDiceEffect extends SpellAbilityEffect {
                 sa.setSVar("MaxRolls", Integer.toString(countMaxRolls));
             }
         }
-
+        SpellAbility sourceSA = sa != null ? sa.getRootAbility() : null;
         int rollNum = 1;
         for (DieRollResult roll : resultsList) {
             final Map<AbilityKey, Object> runParams = AbilityKey.mapFromPlayer(player);
@@ -323,6 +324,7 @@ public class RollDiceEffect extends SpellAbilityEffect {
             runParams.put(AbilityKey.NaturalResult, roll.getNaturalValue());
             runParams.put(AbilityKey.RolledToVisitAttractions, toVisitAttractions);
             runParams.put(AbilityKey.Number, player.getNumRollsThisTurn() - amount + rollNum);
+            runParams.put(AbilityKey.SourceSA, sourceSA);
             player.getGame().getTriggerHandler().runTrigger(TriggerType.RolledDie, runParams, false);
             rollNum++;
         }
@@ -330,6 +332,7 @@ public class RollDiceEffect extends SpellAbilityEffect {
         runParams.put(AbilityKey.Sides, sides);
         runParams.put(AbilityKey.Result, getFinalResults(resultsList));
         runParams.put(AbilityKey.RolledToVisitAttractions, toVisitAttractions);
+        runParams.put(AbilityKey.SourceSA, sourceSA);
         player.getGame().getTriggerHandler().runTrigger(TriggerType.RolledDieOnce, runParams, false);
 
         return getFinalResults(resultsList).stream().reduce(0, Integer::sum);
@@ -369,8 +372,8 @@ public class RollDiceEffect extends SpellAbilityEffect {
         List<Card> canIncrementDice = new ArrayList<>();
         for (Card c : xenosquirrels) {
             // Xenosquirrels must have a P1P1 counter on it to remove in order to modify
-            Integer P1P1Counters = c.getCounters().get(CounterEnumType.P1P1);
-            if (P1P1Counters != null && P1P1Counters > 0 && c.canRemoveCounters(CounterEnumType.P1P1)) {
+            int P1P1Counters = c.getCounters(CounterEnumType.P1P1);
+            if (P1P1Counters > 0 && c.canRemoveCounters(CounterEnumType.P1P1)) {
                 canIncrementDice.add(c);
             }
         }
@@ -401,7 +404,6 @@ public class RollDiceEffect extends SpellAbilityEffect {
      */
     @SuppressWarnings("unchecked")
     private static List<Integer> rollAction(int amount, int sides, int ignore, List<Integer> rollsResult, List<Integer> ignored, Map<Player, Integer> ignoreChosenMap, Set<Card> dicePTExchanges, Player player, Map<AbilityKey, Object> repParams) {
-
         repParams.put(AbilityKey.Sides, sides);
         repParams.put(AbilityKey.Number, amount);
         repParams.put(AbilityKey.Ignore, ignore);
@@ -422,14 +424,16 @@ public class RollDiceEffect extends SpellAbilityEffect {
         }
 
         List<Integer> naturalRolls = (rollsResult == null ? new ArrayList<>() : rollsResult);
+        List<Integer> rolled = new ArrayList<>();
 
         for (int i = 0; i < amount; i++) {
             int roll = MyRandom.getRandom().nextInt(sides) + 1;
-            // Play the die roll sound
-            player.getGame().fireEvent(new GameEventRollDie());
+            player.getGame().fireEvent(new GameEventRollDie(sides, roll));
             player.roll();
             naturalRolls.add(roll);
+            rolled.add(roll);
         }
+        player.getGame().fireEvent(new GameEventRollDice(sides, rolled));
 
         naturalRolls.sort(null);
 

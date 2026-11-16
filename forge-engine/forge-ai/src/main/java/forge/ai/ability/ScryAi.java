@@ -23,7 +23,6 @@ public class ScryAi extends SpellAbilityAi {
     @Override
     protected AiAbilityDecision doTriggerNoCost(Player ai, SpellAbility sa, boolean mandatory) {
         if (sa.usesTargeting()) {
-            // ability is targeted
             sa.resetTargets();
 
             if (sa.canTarget(ai)) {
@@ -46,11 +45,10 @@ public class ScryAi extends SpellAbilityAi {
             }
 
             if ("X".equals(sa.getParam("ScryNum")) && sa.getSVar("X").equals("Count$xPaid")) {
-                int xPay = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
+                int xPay = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
                 if (xPay == 0) {
                     return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
-                sa.getRootAbility().setXManaCostPaid(xPay);
             }
 
             if (mandatory) {
@@ -59,13 +57,12 @@ public class ScryAi extends SpellAbilityAi {
 
             if (sa.isTargetNumberValid()) {
                 return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-            } else {
-                return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
             }
+            return new AiAbilityDecision(0, AiPlayDecision.TargetingFailed);
         }
 
         return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-    } // scryTargetAI()
+    }
 
     @Override
     public AiAbilityDecision chkDrawback(Player ai, SpellAbility sa) {
@@ -91,7 +88,7 @@ public class ScryAi extends SpellAbilityAi {
         if (sa.getPayCosts().hasTapCost()
                 && (sa.getPayCosts().hasManaCost() || sa.getHostCard().isCreature())
                 && !isSorcerySpeed(sa, ai)) {
-            return ph.getNextTurn() == ai && ph.is(PhaseType.END_OF_TURN);
+            return ph.isPlayerNextTurn(ai) && ph.is(PhaseType.END_OF_TURN);
         }
 
         // AI logic to scry in Main 1 if there is no better option, otherwise scry at opponent's EOT
@@ -127,8 +124,8 @@ public class ScryAi extends SpellAbilityAi {
             }
         }
 
-        return (!hasSomethingElse && ph.getPlayerTurn() == ai && ph.getPhase().isAfter(PhaseType.DRAW))
-                || (ph.getNextTurn() == ai && ph.is(PhaseType.END_OF_TURN));
+        return (!hasSomethingElse && ph.isPlayerTurn(ai) && ph.getPhase().isAfter(PhaseType.DRAW))
+                || (ph.isPlayerNextTurn(ai) && ph.is(PhaseType.END_OF_TURN));
     }
 
     /**
@@ -155,7 +152,11 @@ public class ScryAi extends SpellAbilityAi {
         if (isSorcerySpeed(sa, ai)) {
             chance = .667; // 66.7% chance for sorcery speed (since it will never activate EOT)
         }
-        boolean randomReturn = MyRandom.getRandom().nextFloat() <= chance;
+        // Instant-speed selection is most useful immediately before the AI untaps and draws.
+        final PhaseHandler phase = ai.getGame().getPhaseHandler();
+        final boolean atOpponentEndStep = !isSorcerySpeed(sa, ai)
+                && phase.isPlayerNextTurn(ai) && phase.is(PhaseType.END_OF_TURN);
+        boolean randomReturn = atOpponentEndStep || MyRandom.getRandom().nextFloat() <= chance;
 
         if (playReusable(ai, sa)) {
             randomReturn = true;
@@ -177,11 +178,10 @@ public class ScryAi extends SpellAbilityAi {
         }
 
         if ("X".equals(sa.getParam("ScryNum")) && sa.getSVar("X").equals("Count$xPaid")) {
-            int xPay = ComputerUtilCost.getMaxXValue(sa, ai, sa.isTrigger());
+            int xPay = ComputerUtilCost.setMaxXValue(sa, ai, sa.isTrigger());
             if (xPay == 0) {
                 return new AiAbilityDecision(0, AiPlayDecision.CantAffordX);
             }
-            sa.getRootAbility().setXManaCostPaid(xPay);
         }
 
         if (randomReturn) {

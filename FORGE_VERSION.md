@@ -4,20 +4,25 @@
 it, compares it against the newest `forge-X.Y.Z` tag upstream, and proposes an upgrade when
 they differ.
 
-## Why it currently says `pre-forge-2.0.12`
+## History
 
-`forge-engine/pom.xml` says `<versionCode>2.0.12</versionCode>`, which looks like the answer
-but is not. Forge's `master` carries the *upcoming* version number, so a snapshot taken from
-master while it read 2.0.12 is somewhere *before* the `forge-2.0.12` tag, not at it.
+The first import was an unreleased snapshot of upstream's master from before the
+`forge-2.0.12` tag (recorded here as `pre-forge-2.0.12`). The weekly upgrade job then failed
+silently for eight weeks on a checkout bug, so sets released after June 2026 said "won't work
+in Forge" on import. On 2026-11-16 the engine and card data were brought to `forge-2.0.16` by
+hand, following the workflow's steps exactly, together with the bridge changes that release
+needed (see below). From here the pin is a real upstream tag and the job compares against it.
 
-Compared against tag `forge-2.0.12` by git blob hash, the vendored tree differs in 255 files
-and is missing 10 that upstream deleted. The giveaway is `CardSplitType.java`: tag 2.0.12
-already has the `Prepare` constant and this copy does not — which is precisely why upstream's
-current card scripts abort the card database against this engine.
+## Bridge changes an upgrade can need
 
-So the honest pin is "an unreleased master snapshot from before 2.0.12". Any value that does
-not match an upstream tag makes the workflow treat the engine as out of date, which is
-correct here. After the first successful upgrade this file will hold a real tag.
+The bridge implements two upstream interfaces, `PlayerController` (108 abstract methods) and
+`IGuiGame`, and both move between releases. Upstream signature changes land as compile
+errors in the upgrade job, which is the loud failure we want: the PR is not opened until the
+bridge compiles. 2.0.16 renamed or re-shaped a dozen controller methods (announce bounds now
+come from the engine, discard and mulligan prompts take the hand as a view, stickers,
+`applyManaToCost`, `chooseCardsForCost`, `getCostDecisionMaker`), made most of `IGuiGame`
+default methods, and turned card counters into a multiset. Each needed a few lines in
+`forge-server/`, nothing in the engine.
 
 ## What is and is not modified
 

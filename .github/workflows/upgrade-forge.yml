@@ -101,6 +101,10 @@ jobs:
             rm -rf "forge-engine/$m"
             cp -a "$up/$m" "forge-engine/$m"
           done
+          # forge-gui upstream carries the desktop client's resource tree (adventure mode,
+          # images, a second copy of every card script: ~480 MB) and its release tooling.
+          # The headless build needs only its sources; the card data lives in forge-res.
+          rm -rf forge-engine/forge-gui/res forge-engine/forge-gui/release-files forge-engine/forge-gui/tools
 
           for d in cardsfolder editions tokenscripts; do
             rm -rf "forge-res/$d"

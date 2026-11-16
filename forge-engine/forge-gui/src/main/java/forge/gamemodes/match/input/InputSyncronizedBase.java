@@ -1,12 +1,15 @@
 package forge.gamemodes.match.input;
 
+import forge.util.IHasForgeLog;
+import forge.gamemodes.match.Selection;
 import forge.gui.FThreads;
 import forge.gui.error.BugReporter;
 import forge.player.PlayerControllerHuman;
 
 import java.util.concurrent.CountDownLatch;
 
-public abstract class InputSyncronizedBase extends InputBase implements InputSynchronized {
+public abstract class InputSyncronizedBase extends InputBase implements InputSynchronized, IHasForgeLog {
+
     private static final long serialVersionUID = 8756177361251703052L;
     private final CountDownLatch cdlDone;
 
@@ -18,11 +21,13 @@ public abstract class InputSyncronizedBase extends InputBase implements InputSyn
     @Override
     public void awaitLatchRelease() {
         FThreads.assertExecutedByEdt(false);
+        netLog.trace("awaitLatchRelease() starting on {}, thread = {}", this.getClass().getSimpleName(), Thread.currentThread().getName());
         try {
-            cdlDone.await();
+            getController().getGui().awaitInput(cdlDone);
         } catch (final InterruptedException e) {
             BugReporter.reportException(e);
         }
+        netLog.trace("awaitLatchRelease() UNBLOCKED on {}, thread = {}", this.getClass().getSimpleName(), Thread.currentThread().getName());
     }
 
     @Override
@@ -38,6 +43,7 @@ public abstract class InputSyncronizedBase extends InputBase implements InputSyn
     @Override
     public final void stop() {
         onStop();
+        getController().getGui().setSelection(Selection.ofChosen(getController().getKeptMarks()));
 
         // ensure input won't accept any user actions.
         FThreads.invokeInEdtNowOrLater(this::setFinished);

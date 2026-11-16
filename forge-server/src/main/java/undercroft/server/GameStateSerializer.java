@@ -182,9 +182,9 @@ public class GameStateSerializer {
             // Counters
             if (c.hasCounters()) {
                 JsonObject counters = new JsonObject();
-                for (Map.Entry<CounterType, Integer> entry : c.getCounters().entrySet()) {
-                    if (entry.getValue() > 0) {
-                        counters.addProperty(entry.getKey().getName(), entry.getValue());
+                for (com.google.common.collect.Multiset.Entry<CounterType> entry : c.getCounters().entrySet()) {
+                    if (entry.getCount() > 0) {
+                        counters.addProperty(entry.getElement().getName(), entry.getCount());
                     }
                 }
                 card.add("counters", counters);

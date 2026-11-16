@@ -1,6 +1,8 @@
 package forge.game;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import com.google.common.collect.Iterables;
@@ -23,9 +25,9 @@ import forge.game.spellability.StackItemView;
 import forge.game.staticability.StaticAbility;
 import forge.game.staticability.StaticAbilityLayer;
 import forge.game.zone.MagicStack;
-import forge.trackable.TrackableCollection;
 import forge.trackable.TrackableObject;
 import forge.trackable.TrackableProperty;
+import forge.util.collect.FCollection;
 import forge.util.collect.FCollectionView;
 
 public class GameView extends TrackableObject {
@@ -33,7 +35,7 @@ public class GameView extends TrackableObject {
 
     private final transient Game game; //TODO: Remove this when possible before network support added
     private final transient Match match; //TODO: Remove this when possible before network support added
-    private final transient GameLog gameLog;
+    private transient GameLog gameLog;
 
     public GameView(final Game game) {
         super(game.getId(), game.getTracker());
@@ -63,7 +65,6 @@ public class GameView extends TrackableObject {
     public FCollectionView<PlayerView> getPlayers() {
         return get(TrackableProperty.Players);
     }
-
     public void updatePlayers(final Game game) {
         set(TrackableProperty.Players, PlayerView.getCollection(game.getPlayers()));
     }
@@ -91,7 +92,6 @@ public class GameView extends TrackableObject {
     public int getTurn() {
         return get(TrackableProperty.Turn);
     }
-
     void updateTurn(PhaseHandler phaseHandler) {
         set(TrackableProperty.Turn, phaseHandler.getTurn());
     }
@@ -99,7 +99,6 @@ public class GameView extends TrackableObject {
     public PhaseType getPhase() {
         return get(TrackableProperty.Phase);
     }
-
     void updatePhase(PhaseHandler phaseHandler) {
         set(TrackableProperty.Phase, phaseHandler.getPhase());
     }
@@ -107,7 +106,6 @@ public class GameView extends TrackableObject {
     public PlayerView getPlayerTurn() {
         return get(TrackableProperty.PlayerTurn);
     }
-
     void updatePlayerTurn(PhaseHandler phaseHandler) {
         set(TrackableProperty.PlayerTurn, PlayerView.get(phaseHandler.getPlayerTurn()));
     }
@@ -115,13 +113,12 @@ public class GameView extends TrackableObject {
     public void updatePlanarPlayer(PlayerView p) {
         set(TrackableProperty.PlanarPlayer, p);
     }
-
     public PlayerView getPlanarPlayer() {
         return get(TrackableProperty.PlanarPlayer);
     }
 
     public FCollectionView<StackItemView> getStack() {
-        return get(TrackableProperty.Stack);
+        return Objects.requireNonNullElse(get(TrackableProperty.Stack), FCollection.getEmpty());
     }
 
     public StackItemView peekStack() {
@@ -137,30 +134,22 @@ public class GameView extends TrackableObject {
         set(TrackableProperty.StormCount, stack.getSpellsCastThisTurn().size());
     }
 
-    public boolean isFirstGameInMatch() {
-        return getNumPlayedGamesInMatch() == 0;
-    }
-
     public int getNumPlayedGamesInMatch() {
         return get(TrackableProperty.NumPlayedGamesInMatch);
+    }
+
+    public boolean isMulligan() {
+        return get(TrackableProperty.Mulligan);
+    }
+    public void updateIsMulligan(boolean value) {
+        set(TrackableProperty.Mulligan, value);
     }
 
     public boolean isGameOver() {
         return get(TrackableProperty.GameOver);
     }
-
     public boolean isMatchOver() {
         return get(TrackableProperty.MatchOver);
-    }
-
-    public boolean isMulligan() {
-        if (get(TrackableProperty.Mulligan) == null)
-            return false;
-        return get(TrackableProperty.Mulligan);
-    }
-
-    public void updateIsMulligan(boolean value) {
-        set(TrackableProperty.Mulligan, value);
     }
 
     public String getWinningPlayerName() {
@@ -184,11 +173,9 @@ public class GameView extends TrackableObject {
         return gameLog;
     }
 
-    public TrackableCollection<CardView> getRevealedCollection() {
-        return get(TrackableProperty.RevealedCardsCollection);
-    }
-    public void updateRevealedCards(TrackableCollection<CardView> collection) {
-        set(TrackableProperty.RevealedCardsCollection, collection);
+    /** Initialize the game log for network-deserialized GameViews (transient field is null after deserialization). */
+    public void initGameLog() {
+        this.gameLog = new GameLog();
     }
 
     public String getDependencies() {
@@ -218,9 +205,6 @@ public class GameView extends TrackableObject {
     public CombatView getCombat() {
         return get(TrackableProperty.CombatView);
     }
-    public void updateCombatView(CombatView combatView) {
-        set(TrackableProperty.CombatView, combatView);
-    }
 
     void updateCombat(Combat combat) {
         if (combat == null) {
@@ -229,9 +213,11 @@ public class GameView extends TrackableObject {
         }
 
         final CombatView combatView = new CombatView(combat.getAttackingPlayer().getGame().getTracker());
+        // one pass over the combat instead of a scan per band: this runs on every addAttacker
+        final Map<AttackingBand, GameEntity> defenders = combat.getDefenderByBand();
         for (final AttackingBand b : combat.getAttackingBands()) {
             if (b == null) continue;
-            final GameEntity defender = combat.getDefenderByAttacker(b);
+            final GameEntity defender = defenders.get(b);
             final List<Card> blockers = combat.getBlockers(b);
             final boolean isBlocked = b.isBlocked() == Boolean.TRUE;
             combatView.addAttackingBand(
@@ -240,24 +226,7 @@ public class GameView extends TrackableObject {
                     isBlocked ? CardView.getCollection(blockers) : null,
                     CardView.getCollection(blockers));
         }
-        updateCombatView(combatView);
-    }
-
-    public void serialize() {
-        /*try {
-            GameStateSerializer serializer = new GameStateSerializer(filename);
-            game.saveState(serializer);
-            serializer.writeEndOfFile();
-            serializer.bw.close();
-        }
-        catch (Exception e) {
-            e.printStackTrace();
-        }*/
-    }
-
-    public void deserialize() {
-        /*GameStateDeserializer deserializer = new GameStateDeserializer();
-        deserializer.readObject();*/
+        set(TrackableProperty.CombatView, combatView);
     }
 
     //TODO: Find better ways to make this information available to all GUIs without using the Game class
@@ -279,6 +248,9 @@ public class GameView extends TrackableObject {
     }
 
     public Deck getDeck(final PlayerView pv) {
+        if (getMatch() == null) { // transient, null on network clients after deserialization
+            return null;
+        }
         for (final RegisteredPlayer rp : getMatch().getPlayers()) {
             if (pv.isLobbyPlayer(rp.getPlayer())) {
                 return rp.getDeck();
@@ -293,5 +265,13 @@ public class GameView extends TrackableObject {
 
     public AnteResult getAnteResult(PlayerView player) {
         return getOutcome().getAnteResult(player);
+    }
+
+    @Override
+    public String toString() {
+        return String.format("GameView[id=%d, turn=%d, phase=%s, players=%d, gameOver=%b]",
+                getId(), getTurn(), getPhase(),
+                getPlayers() != null ? getPlayers().size() : 0,
+                isGameOver());
     }
 }

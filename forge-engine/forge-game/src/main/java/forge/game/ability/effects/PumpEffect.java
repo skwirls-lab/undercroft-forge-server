@@ -7,7 +7,6 @@ import java.util.stream.Collectors;
 import forge.util.*;
 import org.apache.commons.lang3.StringUtils;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 
 import forge.GameCommand;
@@ -130,7 +129,7 @@ public class PumpEffect extends SpellAbilityEffect {
         final String duration = sa.getParam("Duration");
 
         if (!keywords.isEmpty()) {
-            p.addChangedKeywords(keywords, ImmutableList.of(), timestamp, 0);
+            p.addChangedKeywords(keywords, List.of(), timestamp, 0);
         }
 
         if (!"Permanent".equals(duration)) {
@@ -286,7 +285,8 @@ public class PumpEffect extends SpellAbilityEffect {
                     ? TextUtil.fastReplace(sa.getParam("OptionQuestion"), "TARGETS", targets)
                     : Localizer.getInstance().getMessage("lblApplyPumpToTarget", targets);
 
-            if (!activator.getController().confirmAction(sa, null, message, null)) {
+            final Card cardToShow = tgtCards.size() == 1 ? tgtCards.get(0) : null;
+            if (!activator.getController().confirmAction(sa, null, message, cardToShow, null)) {
                 return;
             }
         }
@@ -383,7 +383,7 @@ public class PumpEffect extends SpellAbilityEffect {
             final int numkw = AbilityUtils.calculateAmount(host, num, sa);
             List<String> choice = Lists.newArrayList();
             List<String> total = Lists.newArrayList(keywords);
-            if (sa.hasParam("NoRepetition")) {
+            if (sa.hasParam("NoRepetition") && !tgtCards.isEmpty()) {
                 for (String kw : keywords) {
                     if (tgtCards.get(0).hasKeyword(kw)) {
                         total.remove(kw);

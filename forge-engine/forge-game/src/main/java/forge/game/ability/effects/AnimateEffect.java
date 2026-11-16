@@ -35,11 +35,9 @@ public class AnimateEffect extends AnimateEffectBase {
             return;
         }
 
-        // Remember Objects
         if (sa.hasParam("RememberObjects")) {
             animateRemembered = sa.getParam("RememberObjects");
         }
-        // Imprint Cards
         if (sa.hasParam("ImprintCards")) {
             animateImprinted = sa.getParam("ImprintCards");
         }
@@ -160,7 +158,8 @@ public class AnimateEffect extends AnimateEffectBase {
                     ? TextUtil.fastReplace(sa.getParam("OptionQuestion"), "TARGETS", targets)
                     : getStackDescription(sa);
 
-            if (!sa.getActivatingPlayer().getController().confirmAction(sa, null, message, null)) {
+            final Card cardToShow = tgts.size() == 1 ? tgts.get(0) : null;
+            if (!sa.getActivatingPlayer().getController().confirmAction(sa, null, message, cardToShow, null)) {
                 return;
             }
         }

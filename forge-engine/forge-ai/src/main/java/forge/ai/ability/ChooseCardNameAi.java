@@ -5,10 +5,7 @@ import com.google.common.collect.Lists;
 import forge.StaticData;
 import forge.ai.*;
 import forge.card.*;
-import forge.game.card.Card;
-import forge.game.card.CardCollection;
-import forge.game.card.CardCopyService;
-import forge.game.card.CardLists;
+import forge.game.card.*;
 import forge.game.player.Player;
 import forge.game.spellability.SpellAbility;
 import forge.game.spellability.TargetRestrictions;
@@ -30,12 +27,14 @@ public class ChooseCardNameAi extends SpellAbilityAi {
             }
 
             String logic = sa.getParam("AILogic");
+            if (logic.equals(NamedDiscard.LOGIC)) {
+                return NamedDiscard.consider(ai, sa);
+            }
             if (logic.equals("CursedScroll")) {
                 if (SpecialCardAi.CursedScroll.consider(ai, sa)) {
                     return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
-                } else {
-                    return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
                 }
+                return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
             }
 
             final TargetRestrictions tgt = sa.getTargetRestrictions();
@@ -76,7 +75,8 @@ public class ChooseCardNameAi extends SpellAbilityAi {
             return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
         }
 
-        if (mandatory) {
+        // like canPlay, a naming AILogic means the AI knows what to name (e.g. as a permanent with a naming ETB replacement enters)
+        if (mandatory || !aiLogic.isEmpty()) {
             return new AiAbilityDecision(100, AiPlayDecision.WillPlay);
         }
         return new AiAbilityDecision(0, AiPlayDecision.CantPlayAi);
@@ -103,7 +103,7 @@ public class ChooseCardNameAi extends SpellAbilityAi {
         final CardDb cardDb = StaticData.instance().getCommonCards();
 
         for (ICardFace face : faces) {
-            final CardRules rules = cardDb.getRules(face.getName());
+            final CardRules rules = cardDb.getRulesOrElseUnsupported(face.getName());
             boolean isOther = rules.getOtherPart() == face;
             final PaperCard paper = cardDb.getCard(rules.getName());
             final Card card = Card.fromPaperCard(paper, ai);
@@ -121,6 +121,7 @@ public class ChooseCardNameAi extends SpellAbilityAi {
                 cards.add(copy);
             } else if (!isOther) {
                 // other can't be cast that way, not need to prevent that
+                CardUtil.turnToRightFace(face.getName(), card);
                 cards.add(card);
             }
         }

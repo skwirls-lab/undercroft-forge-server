@@ -7,7 +7,7 @@ import java.util.Map;
 
 import com.google.common.collect.Sets;
 
-import forge.ai.GameState;
+import forge.game.GameState;
 import forge.card.GamePieceType;
 import forge.game.Game;
 import forge.game.GameType;
@@ -19,10 +19,8 @@ import forge.game.spellability.SpellAbility;
 import forge.game.trigger.Trigger;
 import forge.game.trigger.TriggerHandler;
 import forge.game.zone.ZoneType;
-import forge.item.IPaperCard;
 import forge.item.InventoryItem;
 import forge.localinstance.properties.ForgeConstants;
-import forge.model.FModel;
 
 public class Puzzle extends GameState implements InventoryItem, Comparable<Puzzle> {
     String name;
@@ -34,6 +32,8 @@ public class Puzzle extends GameState implements InventoryItem, Comparable<Puzzl
     String targets;
     int targetCount = 1;
     boolean humanControl = false;
+    /** The tutorial is a fixed practice game, not a puzzle: no "Puzzle Goal" card and no turn limit. */
+    boolean hideGoal = false;
     int turns;
     boolean completed;
 
@@ -70,6 +70,8 @@ public class Puzzle extends GameState implements InventoryItem, Comparable<Puzzl
                 this.targetCount = Integer.parseInt(split[1]);
             } else if ("HumanControl".equalsIgnoreCase(split[0])) {
                 this.humanControl = "true".equalsIgnoreCase(split[1].trim());
+            } else if ("HideGoal".equalsIgnoreCase(split[0])) {
+                this.hideGoal = "true".equalsIgnoreCase(split[1].trim());
             }
         }
     }
@@ -106,10 +108,6 @@ public class Puzzle extends GameState implements InventoryItem, Comparable<Puzzl
     
     private void loadGameState(List<String> stateLines) {
         this.parse(stateLines);
-    }
-
-    public IPaperCard getPaperCard(final String cardName, final String setCode, final int artID) {
-        return FModel.getMagicDb().getCommonCards().getCard(cardName, setCode, artID);
     }
 
     public void setupMaxPlayerHandSize(Game game, int maxHandSize) {
@@ -227,7 +225,9 @@ public class Puzzle extends GameState implements InventoryItem, Comparable<Puzzl
     protected void applyGameOnThread(final Game game) {
         setupMaxPlayerHandSize(game, 7);
         super.applyGameOnThread(game);
-        addGoalEnforcement(game);
+        if (!hideGoal) {
+            addGoalEnforcement(game);
+        }
         game.getRules().setAppliedVariants(Sets.newHashSet(GameType.Puzzle));
 
         // for puzzles that are tricky to implement for the AI, they can be fully controlled by the human player
@@ -259,6 +259,9 @@ public class Puzzle extends GameState implements InventoryItem, Comparable<Puzzl
             sb.append("[COMPLETED] ");
         }
         sb.append(name);
+        if (this.difficulty != null) {
+            sb.append(" (" + this.difficulty + ")");
+        }
         return sb.toString();
     }
 

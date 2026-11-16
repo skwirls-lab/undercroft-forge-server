@@ -162,7 +162,7 @@ public class ForgeInit {
         @Override public String showFileDialog(String t, String d) { return null; }
         @Override public File getSaveFile(File def) { return def; }
         @Override public void download(GuiDownloadService svc, Consumer<Boolean> cb) { if (cb != null) cb.accept(true); }
-        @Override public void refreshSkin() {}
+        @Override public String getUserAgent() { return "Undercroft/forge-server"; }
         @Override public void showCardList(String t, String m, List<PaperCard> l) {}
         @Override public boolean showBoxedProduct(String t, String m, List<PaperCard> l) { return true; }
         @Override public PaperCard chooseCard(String t, String m, List<PaperCard> l) { return l.isEmpty() ? null : l.get(0); }
