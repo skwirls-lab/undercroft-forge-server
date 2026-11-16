@@ -32,9 +32,13 @@ does not match — so a patch to the engine can never be silently destroyed by a
 
 Two things *are* ours, and upgrades preserve both:
 
-- **`forge-engine/pom.xml`** — the `<modules>` list is cut to the four modules a headless
-  server needs, dropping `forge-gui-desktop`, `forge-gui-mobile` and the rest. An upgrade
-  copies across only the version number, never the file.
+- **`forge-engine/pom.xml`** — upstream's parent pom with the `<modules>` list cut to the
+  four modules a headless server needs, dropping `forge-gui-desktop`, `forge-gui-mobile` and
+  the rest. An upgrade copies upstream's pom (and the `checkstyle.xml` beside it) and re-cuts
+  the modules; it cannot carry only the version number across, because the module poms name
+  their parent's exact version and everything else they rely on (properties, dependency and
+  plugin management) must match. The bridge's `forge-server/pom.xml` has its `forge.version`
+  pointed at the new parent version in the same step.
 - **`forge-server/`** — the entire bridge: `BridgePlayerController`, `GameStateSerializer`,
   `GameEventForwarder`, `ForgeInit`, `ForgeServer`. Upgrades never touch this directory.
 

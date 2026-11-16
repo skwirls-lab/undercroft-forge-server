@@ -107,18 +107,37 @@ jobs:
             cp -a "$up/forge-gui/res/$d" "forge-res/$d"
           done
 
-          # forge-engine/pom.xml is deliberately NOT replaced. It is the one file in the
-          # engine we do modify: its <modules> list is cut down to the four modules a
-          # headless server needs, dropping forge-gui-desktop, forge-gui-mobile and the rest.
-          # Copying upstream's would drag those back in and break the build. Only the version
-          # number is carried across, so the pom stops claiming a release it is not.
-          upstream_version="$(sed -n 's:.*<versionCode>\(.*\)</versionCode>.*:\1:p' "$up/pom.xml" | head -1)"
-          if [ -z "$upstream_version" ]; then
-            echo "Could not read versionCode from upstream pom.xml" >&2
+          # forge-engine/pom.xml is upstream's parent pom with one edit: its <modules> list is
+          # cut to the four a headless server needs (forge-gui-desktop, -mobile, -android and
+          # the rest never build here). Everything else — the version, the properties, the
+          # dependency and plugin management the modules rely on — must come from upstream,
+          # because the module poms name their parent's exact version. Carrying only the
+          # versionCode across, as this used to, left the modules asking for a parent that
+          # did not exist and the build dead at "Non-resolvable parent POM".
+          cp "$up/pom.xml" forge-engine/pom.xml
+          # The parent pom runs checkstyle against this file, which lives beside it upstream.
+          cp "$up/checkstyle.xml" forge-engine/checkstyle.xml
+          sed -i -E '/<module>/{/<module>(forge-core|forge-game|forge-ai|forge-gui)<\/module>/!d}' forge-engine/pom.xml
+          if [ "$(grep -c '<module>' forge-engine/pom.xml)" != "4" ]; then
+            echo "Expected exactly four modules after the cut:" >&2
+            grep '<module>' forge-engine/pom.xml >&2
             exit 1
           fi
-          sed -i "s:<versionCode>[^<]*</versionCode>:<versionCode>${upstream_version}</versionCode>:" \
-            forge-engine/pom.xml
+
+          # The bridge depends on the engine artifacts by version; point it at the new one.
+          parent_version="$(python3 - <<'PY'
+          import re
+          s = open('forge-engine/pom.xml').read()
+          m = re.search(r'<artifactId>forge</artifactId>\s*<version>([^<]+)</version>', s)
+          print(m.group(1) if m else '')
+          PY
+          )"
+          if [ -z "$parent_version" ]; then
+            echo "Could not read the parent version from upstream pom.xml" >&2
+            exit 1
+          fi
+          sed -i "s:<forge.version>[^<]*</forge.version>:<forge.version>${parent_version}</forge.version>:" forge-server/pom.xml
+          grep -q "<forge.version>${parent_version}</forge.version>" forge-server/pom.xml
 
           echo "${{ steps.target.outputs.target }}" > FORGE_VERSION
 
@@ -192,9 +211,9 @@ jobs:
 
             **Nothing of ours was overwritten.** This job verifies
             `forge-engine/ENGINE_BASELINE.txt` before touching a file and refuses to run if
-            the engine has been patched locally. `forge-engine/pom.xml` (the stripped module
-            list) and the whole of `forge-server/` are untouched by design — see
-            `FORGE_VERSION.md`.
+            the engine has been patched locally. `forge-engine/pom.xml` is upstream's parent
+            pom with the module list cut to four; `forge-server/` is untouched except for the
+            engine version it depends on — see `FORGE_VERSION.md`.
 
             Worth a real test game after merging. The gates prove the card database loads,
             not that gameplay is unchanged.
