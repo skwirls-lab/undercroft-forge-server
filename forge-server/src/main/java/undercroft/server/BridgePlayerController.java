@@ -69,6 +69,15 @@ public class BridgePlayerController extends PlayerController {
     private static final Logger log = LoggerFactory.getLogger(BridgePlayerController.class);
     private static final long CHOICE_TIMEOUT_SECONDS = 1800; // 30 minutes per decision
 
+    /**
+     * Mana payments nest: tapping Sungrass Prairie ({1}, {T}: Add {G}{W}) for a spell asks for
+     * {1} first, through this same loop. The stack says what each prompt is really for, so the
+     * client can explain "Sungrass Prairie needs {1} before it makes mana for Plague Myr".
+     */
+    private final java.util.ArrayDeque<String> manaPaymentFor = new java.util.ArrayDeque<>();
+    /** One line for the next mana prompt about why the last tap did nothing. */
+    private String manaPaymentNotice = null;
+
     private final WsContext wsContext;
     private final Gson gson;
 
@@ -1526,6 +1535,8 @@ public class BridgePlayerController extends PlayerController {
     private static final class ManaProduction {
         final JsonArray symbols = new JsonArray();
         int amount = 0;
+        /** The mana its cheapest ability costs to activate, or null when one of them is free. */
+        String extraCost = null;
     }
 
     /**
@@ -1539,9 +1550,17 @@ public class BridgePlayerController extends PlayerController {
         ManaProduction out = new ManaProduction();
         if (manaAbs == null) return out;
         java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        boolean anyFree = false;
+        String cheapest = null;
         for (SpellAbility ma : manaAbs) {
             forge.game.spellability.AbilityManaPart part = ma.getManaPart();
             if (part == null) continue;
+            if (ma.getPayCosts() == null || !ma.getPayCosts().hasManaCost()) {
+                anyFree = true;
+            } else {
+                String cost = ma.getPayCosts().getTotalMana().getShortString();
+                if (cheapest == null || cost.length() < cheapest.length()) cheapest = cost;
+            }
             String produced;
             if (part.isAnyMana()) produced = "Any";
             else if (part.isComboMana()) produced = part.getComboColors(ma);
@@ -1557,11 +1576,21 @@ public class BridgePlayerController extends PlayerController {
             out.amount = Math.max(out.amount, count);
         }
         for (String sym : seen) out.symbols.add(sym);
+        if (!anyFree && cheapest != null) out.extraCost = cheapest;
         return out;
     }
 
     /** The prompt loop behind both mana hooks: tap sources one at a time until the cost is met. */
     private boolean payInteractively(ManaCostBeingPaid manaCost, SpellAbility sa) {
+        manaPaymentFor.push(sa.getHostCard() != null ? sa.getHostCard().getName() : "?");
+        try {
+            return payInteractivelyInner(manaCost, sa);
+        } finally {
+            manaPaymentFor.pop();
+        }
+    }
+
+    private boolean payInteractivelyInner(ManaCostBeingPaid manaCost, SpellAbility sa) {
         if (manaCost.isPaid()) {
             log.info("payManaCost: cost already paid (0 or reduced to 0)");
             return true;
@@ -1636,6 +1665,17 @@ public class BridgePlayerController extends PlayerController {
             data.addProperty("manaCost", manaCost.toString());
             data.addProperty("spellName", sa.getHostCard().getName());
             data.addProperty("canCancel", true);
+            if (manaPaymentFor.size() > 1) {
+                // This prompt pays a mana ability's own cost; the outer one is the spell.
+                java.util.Iterator<String> it = manaPaymentFor.iterator();
+                it.next();
+                data.addProperty("isAbilityCost", true);
+                data.addProperty("forSpell", it.next());
+            }
+            if (manaPaymentNotice != null) {
+                data.addProperty("notice", manaPaymentNotice);
+                manaPaymentNotice = null;
+            }
             if (lifeOffer) {
                 // {W/P}, {U/P}, ...: the player may pay two life instead of the mana. The
                 // option was simply never offered before.
@@ -1653,6 +1693,10 @@ public class BridgePlayerController extends PlayerController {
                 ManaProduction production = describeManaProduction(sourceAbilities.get(c));
                 cardObj.add("produces", production.symbols);
                 cardObj.addProperty("amount", production.amount);
+                if (production.extraCost != null) {
+                    // Every way this makes mana costs mana itself ({1}, {T}: Add {G}{W}).
+                    cardObj.addProperty("extraCost", production.extraCost);
+                }
                 sourcesArray.add(cardObj);
             }
             data.add("sources", sourcesArray);
@@ -1693,7 +1737,20 @@ public class BridgePlayerController extends PlayerController {
                         // Activate mana ability — same as InputPayMana.activateManaAbility
                         // Pay tap cost and resolve (same as HumanPlay.playSpellAbility for mana)
                         CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
-                        if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
+                        boolean wasTapped = chosen.isTapped();
+                        boolean activated = payment.payComputerCosts(new AiCostDecision(player, ma, false));
+                        if (!activated) {
+                            // The tap is paid before the mana part of an ability's cost, so a
+                            // failed {1} left Sungrass Prairie tapped for nothing. Give it back
+                            // (payComputerCosts records nothing for refundPayment to undo) and
+                            // say so on the next prompt.
+                            if (!wasTapped && chosen.isTapped()) chosen.setTapped(false);
+                            new forge.game.mana.ManaRefundService(ma).refundManaPaid();
+                            manaPaymentNotice = chosen.getName() + " was not tapped: its own cost ("
+                                    + ma.getPayCosts().toSimpleString() + ") was not paid. Pay that from another source first, or tap something else.";
+                            log.info("payManaCost: {} not activated — its cost {} was not paid; refunded", chosen.getName(), ma.getPayCosts().toSimpleString());
+                        }
+                        if (activated) {
                             // Through the stack, as HumanPlaySpellAbility does. A mana ability
                             // never waits there — MagicStack.add resolves it at once — but on
                             // the way it counts the activation (so "activate only once each
