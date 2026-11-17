@@ -1453,6 +1453,113 @@ public class BridgePlayerController extends PlayerController {
         return new AiCostDecision(p, ability, effect);
     }
 
+    /**
+     * The mana ability of a source that should pay the cost, mirroring InputPayMana: only
+     * abilities whose mana the cost can still use count; one that makes a colour the cost
+     * needs wins over one that only pays generic; when the choice still matters (two colours
+     * both needed, or a spell that tracks the colours spent, such as Converge) the player is
+     * asked. "Any colour" abilities are told which colours are worth offering, so Command
+     * Tower paying {G} does not ask. Null when nothing the source makes pays what is owed.
+     */
+    private SpellAbility chooseManaAbilityFor(Card source, SpellAbility saPaidFor, ManaCostBeingPaid manaCost) {
+        forge.game.mana.ManaPool pool = player.getManaPool();
+        byte colorCanUse = 0;
+        byte colorNeeded = 0;
+        for (final byte color : ManaAtom.MANATYPES) {
+            if (manaCost.isAnyPartPayableWith(color, pool)) colorCanUse |= color;
+            if (manaCost.needsColor(color, pool)) colorNeeded |= color;
+        }
+        if (manaCost.isAnyPartPayableWith((byte) ManaAtom.GENERIC, pool)) colorCanUse |= ManaAtom.GENERIC;
+        if (colorCanUse == 0) return null;
+
+        List<SpellAbility> useful = new ArrayList<>();
+        for (SpellAbility ma : source.getManaAbilities()) {
+            ma.setActivatingPlayer(player);
+            if (ma.isManaAbilityFor(saPaidFor, colorCanUse)) useful.add(ma);
+        }
+        if (useful.isEmpty()) return null;
+
+        boolean tracksSpent = saPaidFor.tracksManaSpent();
+        SpellAbility picked = null;
+        if (useful.size() == 1) {
+            picked = useful.get(0);
+        } else if (!tracksSpent && colorNeeded == 0) {
+            // Only generic is left: any of them pays it and the colour does not matter.
+            picked = useful.get(0);
+        } else {
+            List<SpellAbility> candidates = useful;
+            if (!tracksSpent && colorNeeded != 0) {
+                List<SpellAbility> matches = new ArrayList<>();
+                for (SpellAbility ma : useful) {
+                    if (ma.isManaAbilityFor(saPaidFor, colorNeeded)) matches.add(ma);
+                }
+                if (matches.size() == 1) picked = matches.get(0);
+                else if (!matches.isEmpty()) candidates = matches;
+            }
+            if (picked == null) {
+                JsonObject data = new JsonObject();
+                data.addProperty("cardName", source.getName());
+                data.addProperty("cardId", source.getId());
+                data.addProperty("prompt", "Tap " + source.getName() + " for which mana?");
+                data.add("abilities", serializeSpellAbilities(candidates));
+                JsonObject response = requestChoice("choose_ability", data);
+                if (response.has("cancel") && response.get("cancel").getAsBoolean()) return null;
+                int index = response.has("index") ? response.get("index").getAsInt() : 0;
+                picked = (index >= 0 && index < candidates.size()) ? candidates.get(index) : candidates.get(0);
+            }
+        }
+
+        // The express choice for "any colour" abilities: only colours the cost can use, the
+        // needed ones first; a spell that counts colours spent gets the full choice.
+        byte offer = tracksSpent ? ColorSet.WUBRG.getColor() : (colorNeeded == 0 ? colorCanUse : colorNeeded);
+        ColorSet colors = ColorSet.fromMask(offer);
+        int producedColorMask = 0;
+        for (final byte color : ManaAtom.MANATYPES) {
+            if (picked.canProduce(MagicColor.toShortString(color)) && colors.hasAnyColor(color)) {
+                producedColorMask |= color;
+            }
+        }
+        picked.setManaExpressChoice(ColorSet.fromMask(producedColorMask));
+        return picked;
+    }
+
+    private static final class ManaProduction {
+        final JsonArray symbols = new JsonArray();
+        int amount = 0;
+    }
+
+    /**
+     * What a permanent's mana abilities can make, as symbols the client can draw: W U B R G C,
+     * or "Any". Combo and colour-identity sources resolve through the engine (Command Tower
+     * knows the commander's colours). "Special" sources (Reflecting Pool) depend on the rest of
+     * the board and resolving them here would run an effect, so they are shown as "Any".
+     * amount is the most mana one ability makes (Sol Ring: 2), so the prompt can show two pips.
+     */
+    private static ManaProduction describeManaProduction(List<SpellAbility> manaAbs) {
+        ManaProduction out = new ManaProduction();
+        if (manaAbs == null) return out;
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (SpellAbility ma : manaAbs) {
+            forge.game.spellability.AbilityManaPart part = ma.getManaPart();
+            if (part == null) continue;
+            String produced;
+            if (part.isAnyMana()) produced = "Any";
+            else if (part.isComboMana()) produced = part.getComboColors(ma);
+            else if (part.isSpecialMana()) produced = "Any";
+            else produced = part.getOrigProduced();
+            int count = 0;
+            for (String tok : produced.trim().split("\\s+")) {
+                if (tok.equals("Any") || tok.matches("[WUBRGC]")) {
+                    seen.add(tok);
+                    count++;
+                }
+            }
+            out.amount = Math.max(out.amount, count);
+        }
+        for (String sym : seen) out.symbols.add(sym);
+        return out;
+    }
+
     /** The prompt loop behind both mana hooks: tap sources one at a time until the cost is met. */
     private boolean payInteractively(ManaCostBeingPaid manaCost, SpellAbility sa) {
         if (manaCost.isPaid()) {
@@ -1485,6 +1592,7 @@ public class BridgePlayerController extends PlayerController {
 
             // Gather untapped cards with mana abilities (same as InputPayMana.getAllManaAbilities)
             List<Card> sources = new ArrayList<>();
+            java.util.Map<Card, List<SpellAbility>> sourceAbilities = new java.util.HashMap<>();
             for (Card c : player.getCardsIn(ZoneType.Battlefield)) {
                 if (!c.isTapped()) {
                     List<SpellAbility> manaAbs = new ArrayList<>();
@@ -1496,6 +1604,7 @@ public class BridgePlayerController extends PlayerController {
                     }
                     if (!manaAbs.isEmpty()) {
                         sources.add(c);
+                        sourceAbilities.put(c, manaAbs);
                     }
                 }
             }
@@ -1540,6 +1649,10 @@ public class BridgePlayerController extends PlayerController {
                 cardObj.addProperty("id", c.getId());
                 cardObj.addProperty("name", c.getName());
                 cardObj.addProperty("type", c.getType().toString());
+                // What tapping it makes, so the prompt can draw the symbols instead of a name.
+                ManaProduction production = describeManaProduction(sourceAbilities.get(c));
+                cardObj.add("produces", production.symbols);
+                cardObj.addProperty("amount", production.amount);
                 sourcesArray.add(cardObj);
             }
             data.add("sources", sourcesArray);
@@ -1567,11 +1680,17 @@ public class BridgePlayerController extends PlayerController {
                     if (c.getId() == cardId) { chosen = c; break; }
                 }
                 if (chosen != null) {
-                    // Activate mana ability — same as InputPayMana.activateManaAbility
-                    for (SpellAbility ma : chosen.getManaAbilities()) {
-                        ma.setActivatingPlayer(player);
-                        if (!ma.canPlay(true)) continue;
-
+                    // Which of the card's mana abilities: the one that pays what is still owed.
+                    // Taking the first one that could be played tapped Jetmir's Garden for red
+                    // against a white cost: the land tapped, the mana floated, the cost stood.
+                    SpellAbility picked = chooseManaAbilityFor(chosen, sa, manaCost);
+                    if (picked == null) {
+                        log.info("payManaCost: {} makes nothing that pays {} — asking again", chosen.getName(), manaCost);
+                        continue;
+                    }
+                    {
+                        SpellAbility ma = picked;
+                        // Activate mana ability — same as InputPayMana.activateManaAbility
                         // Pay tap cost and resolve (same as HumanPlay.playSpellAbility for mana)
                         CostPayment payment = new CostPayment(ma.getPayCosts(), ma);
                         if (payment.payComputerCosts(new AiCostDecision(player, ma, false))) {
@@ -1585,7 +1704,6 @@ public class BridgePlayerController extends PlayerController {
                             player.getManaPool().payManaFromAbility(sa, manaCost, ma);
                             log.info("payManaCost: tapped {} — remaining={}", chosen.getName(), manaCost);
                         }
-                        break;
                     }
                 }
             }

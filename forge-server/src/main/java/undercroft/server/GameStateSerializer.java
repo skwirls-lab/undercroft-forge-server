@@ -247,12 +247,18 @@ public class GameStateSerializer {
                 card.add("attachedTo", attachedTo);
             }
 
-            // Keywords (visible ones)
+            // Keywords, as a reader can show them. Script-only pseudo-keywords (an
+            // "etbCounter:P1P1:X:no Condition:Converge — …" line is how a card script says
+            // "enters with counters") are not keywords to a player; the rules text already
+            // says what they do. Hidden extrinsic ones ("CARDNAME can't block.") are effects
+            // on the card worth a tag, with the card's name put back.
             JsonArray keywords = new JsonArray();
             for (String kw : c.getHiddenExtrinsicKeywords()) {
-                keywords.add(kw);
+                String shown = kw.startsWith("HIDDEN ") ? kw.substring(7) : kw;
+                keywords.add(shown.replace("CARDNAME", c.getName()));
             }
             for (var kw : c.getKeywords()) {
+                if (kw.getKeyword() == forge.game.keyword.Keyword.UNDEFINED) continue;
                 keywords.add(kw.getOriginal());
             }
             card.add("keywords", keywords);
