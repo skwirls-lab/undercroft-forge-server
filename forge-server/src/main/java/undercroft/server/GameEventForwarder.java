@@ -63,7 +63,15 @@ public class GameEventForwarder extends IGameEventVisitor.Base<Void> {
         this.humanName = human != null ? human.getName() : "";
     }
 
+    /** Set when the session ends: an abandoned game's last events are nobody's business. */
+    private volatile boolean muted = false;
+
+    void mute() {
+        muted = true;
+    }
+
     private void sendEvent(String eventType, JsonObject data) {
+        if (muted) return;
         data.addProperty("eventType", eventType);
         data.addProperty("rich", true);
         ForgeServer.sendMessage(wsContext, "game_event", data);
