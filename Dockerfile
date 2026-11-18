@@ -21,7 +21,11 @@ COPY --from=build /app/forge-res /app/res
 
 ENV PORT=7000
 ENV FORGE_RES=/app/res
+# Java heap in MB. Every running game lives in this heap, and the server derives how many
+# games it accepts from it (see MAX_GAMES in the README). Raise it from the host's variables,
+# not here; the container needs roughly 300 MB on top of this figure.
+ENV MAX_HEAP_MB=512
 
 EXPOSE 7000
 
-CMD ["java", "-Xmx512m", "-jar", "app.jar"]
+CMD ["sh", "-c", "exec java -Xmx${MAX_HEAP_MB}m -jar app.jar"]

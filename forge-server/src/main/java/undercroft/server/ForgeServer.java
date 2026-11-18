@@ -45,6 +45,46 @@ public class ForgeServer {
     }
 
     /**
+     * How many games may run at once. Every game lives in this process's memory: measured
+     * against a 512 MB heap, the card database takes about 160 MB and a four-player game grows
+     * to about 35 MB by the late turns. Past the limit the heap runs out, and then some game
+     * (not necessarily the newest) dies. So new games are refused before that point. The
+     * default follows the heap this process was given; MAX_GAMES overrides it.
+     */
+    private static final int MAX_GAMES = resolveMaxGames();
+    private static final long HEAP_RESERVED_MB = 160;
+    private static final long HEAP_PER_GAME_MB = 40;
+
+    /** Sign-in check for start_game; null when FIREBASE_PROJECT_ID is not set. */
+    private static final FirebaseTokenVerifier tokenVerifier = resolveTokenVerifier();
+
+    /** One start at a time, so two simultaneous starts cannot both take the last seat. */
+    private static final Object startLock = new Object();
+
+    private static int resolveMaxGames() {
+        String configured = System.getenv("MAX_GAMES");
+        if (configured != null && !configured.isBlank()) {
+            try {
+                return Math.max(1, Integer.parseInt(configured.trim()));
+            } catch (NumberFormatException e) {
+                log.warn("MAX_GAMES is not a number ({}); deriving the limit from the heap", configured);
+            }
+        }
+        long heapMb = Runtime.getRuntime().maxMemory() / (1024 * 1024);
+        return (int) Math.max(2, (heapMb - HEAP_RESERVED_MB) / HEAP_PER_GAME_MB);
+    }
+
+    private static FirebaseTokenVerifier resolveTokenVerifier() {
+        String projectId = System.getenv("FIREBASE_PROJECT_ID");
+        if (projectId == null || projectId.isBlank()) return null;
+        return new FirebaseTokenVerifier(projectId.trim());
+    }
+
+    static long activeGames() {
+        return sessions.values().stream().filter(GameSession::isActive).count();
+    }
+
+    /**
      * Below this, something is wrong with the card data even though the load reported success.
      * A healthy tree loads ~94,600 cards; a partial checkout or a wrong FORGE_RES path can
      * still produce a small, non-zero count, which is worse than an outright failure because
@@ -61,6 +101,12 @@ public class ForgeServer {
 
         log.info("Starting Undercroft Forge Server on port {}", port);
         log.info("Forge resource path: {}", forgeRes);
+        log.info("Heap limit {} MB; at most {} games at once", Runtime.getRuntime().maxMemory() / (1024 * 1024), MAX_GAMES);
+        if (tokenVerifier != null) {
+            log.info("Sign-in required to start a game (FIREBASE_PROJECT_ID is set)");
+        } else {
+            log.warn("FIREBASE_PROJECT_ID is not set: anyone who can reach this server can start a game");
+        }
 
         // Initialize Forge's static data (card definitions, etc.)
         ForgeInit.initialize(forgeRes);
@@ -75,6 +121,19 @@ public class ForgeServer {
 
         // Health check endpoint
         app.get("/health", ctx -> ctx.result("ok"));
+
+        // How full the server is. Counts only; nothing about who is playing or what.
+        app.get("/status", ctx -> {
+            Runtime rt = Runtime.getRuntime();
+            JsonObject status = new JsonObject();
+            status.addProperty("activeGames", activeGames());
+            status.addProperty("maxGames", MAX_GAMES);
+            status.addProperty("heapUsedMb", (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024));
+            status.addProperty("heapMaxMb", rt.maxMemory() / (1024 * 1024));
+            status.addProperty("signInRequired", tokenVerifier != null);
+            ctx.contentType("application/json");
+            ctx.result(status.toString());
+        });
 
         // Card verification endpoint — checks which card names exist in Forge's database
         app.post("/api/check-cards", ctx -> {
@@ -154,19 +213,54 @@ public class ForgeServer {
     }
 
     private static void handleStartGame(WsContext ctx, String sessionId, JsonObject payload) {
-        // Clean up existing session if any
-        GameSession existing = sessions.remove(sessionId);
-        if (existing != null) {
-            existing.shutdown();
+        // Who is asking. The token is checked and then dropped: it is a credential, and nothing
+        // past this point needs it.
+        if (tokenVerifier != null) {
+            String token = payload.has("idToken") && payload.get("idToken").isJsonPrimitive()
+                    ? payload.get("idToken").getAsString() : null;
+            try {
+                String uid = tokenVerifier.verify(token);
+                log.info("start_game from signed-in user {}… (session {})", uid.substring(0, Math.min(6, uid.length())), sessionId);
+            } catch (FirebaseTokenVerifier.AuthException e) {
+                log.warn("start_game refused for session {}: {}", sessionId, e.getMessage());
+                if (e.unavailable) {
+                    sendError(ctx, "auth_unavailable", "The game server could not check sign-ins just now. Try again in a minute.");
+                } else {
+                    sendError(ctx, "auth_required", "Sign in to start a game. If you are signed in, refresh the page and try again.");
+                }
+                return;
+            }
         }
+        payload.remove("idToken");
 
-        try {
-            GameSession session = new GameSession(ctx, payload, gson);
-            sessions.put(sessionId, session);
-            session.start();
-        } catch (Exception e) {
-            log.error("Failed to start game for {}: {}", sessionId, e.getMessage(), e);
-            sendError(ctx, "Failed to start game: " + e.getMessage());
+        synchronized (startLock) {
+            // Clean up existing session if any (a rematch replaces the running game)
+            GameSession existing = sessions.remove(sessionId);
+            if (existing != null) {
+                existing.shutdown();
+            }
+
+            long active = activeGames();
+            if (active >= MAX_GAMES) {
+                log.warn("start_game refused for session {}: {} of {} games running", sessionId, active, MAX_GAMES);
+                JsonObject full = new JsonObject();
+                full.addProperty("code", "server_full");
+                full.addProperty("message", "Every table on the game server is taken right now. Try again in a few minutes.");
+                full.addProperty("activeGames", active);
+                full.addProperty("maxGames", MAX_GAMES);
+                sendMessage(ctx, "error", full);
+                return;
+            }
+
+            try {
+                GameSession session = new GameSession(ctx, payload, gson);
+                sessions.put(sessionId, session);
+                session.start();
+            } catch (Exception e) {
+                sessions.remove(sessionId);
+                log.error("Failed to start game for {}: {}", sessionId, e.getMessage(), e);
+                sendError(ctx, "start_failed", "The game could not be started: " + e.getMessage());
+            }
         }
     }
 
@@ -205,6 +299,14 @@ public class ForgeServer {
     }
 
     /**
+     * An error the client should act on, not only log. Codes: server_full, auth_required,
+     * auth_unavailable, start_failed, game_crashed.
+     */
+    static void sendError(WsContext ctx, String code, String message) {
+        sendMessage(ctx, "error", Map.of("code", code, "message", message));
+    }
+
+    /**
      * Load-and-exit check for CI. Returns a process exit code: 0 healthy, 1 not.
      *
      * This exists because of two real failures. The bridge did not compile for two months and
@@ -215,6 +317,9 @@ public class ForgeServer {
      * be loaded and counted.
      */
     private static int runSmokeTest() {
+        if (!FirebaseTokenVerifier.selfTest()) {
+            return 1;
+        }
         try {
             int cards = StaticData.instance().getCommonCards().getAllCards().size();
             if (cards < MIN_EXPECTED_CARDS) {

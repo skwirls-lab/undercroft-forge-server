@@ -30,10 +30,13 @@ public class GameSession {
     private final JsonObject startPayload;
     private final Gson gson;
 
-    private Game game;
-    private Match match;
-    private BridgePlayerController humanController;
-    private Thread gameThread;
+    // Read from the socket threads and cleared by the game thread when the game ends.
+    private volatile Game game;
+    private volatile Match match;
+    private volatile BridgePlayerController humanController;
+    private volatile Thread gameThread;
+    private volatile BridgeGuiGame guiGame;
+    private volatile GameEventForwarder eventForwarder;
     private volatile boolean running = false;
 
     public GameSession(WsContext wsContext, JsonObject startPayload, Gson gson) {
@@ -126,11 +129,12 @@ public class GameSession {
         humanController = humanLobby.getLastController();
 
         // Create the bridge GUI that pushes state to WebSocket
-        BridgeGuiGame guiGame = new BridgeGuiGame(wsContext, gson);
+        guiGame = new BridgeGuiGame(wsContext, gson);
         guiGame.setGameView(game.getView());
 
         // Subscribe to game events
-        game.subscribeToEvents(new GameEventForwarder(wsContext, gson, game, humanController.getPlayer()));
+        eventForwarder = new GameEventForwarder(wsContext, gson, game, humanController.getPlayer());
+        game.subscribeToEvents(eventForwarder);
 
         // Run game loop in background thread
         gameThread = new Thread(() -> {
@@ -143,11 +147,42 @@ public class GameSession {
                 if (running) {
                     sendGameOver();
                 }
-            } catch (Exception e) {
-                log.error("Game error: {}", e.getMessage(), e);
-                if (running) {
-                    ForgeServer.sendError(wsContext, "Game error: " + e.getMessage());
+            } catch (Throwable t) {
+                // Throwable, not Exception: an OutOfMemoryError or a StackOverflowError is an
+                // Error, and catching only Exception let the thread die without a word. The
+                // player was left looking at a board that would never answer again.
+                boolean wasRunning = running;
+                running = false;
+                boolean outOfMemory = t instanceof OutOfMemoryError;
+                if (!wasRunning) {
+                    // The session was already shut down and the game ended under the engine's
+                    // feet; whatever it tripped over on the way out is not an error.
+                    releaseGame();
+                    return;
                 }
+                // Let go of the game before doing anything that allocates: when memory ran
+                // out, this game's own state is the quickest thing to give back, and the
+                // other games on this server need it.
+                releaseGame();
+                try {
+                    if (outOfMemory) {
+                        log.error("Game ended: the server ran out of memory ({} games were running)", ForgeServer.activeGames() + 1);
+                    } else {
+                        log.error("Game error: {}", t.toString(), t);
+                    }
+                } catch (Throwable ignored) {
+                    // logging must not keep the player from being told
+                }
+                if (wasRunning) {
+                    ForgeServer.sendError(wsContext, "game_crashed", outOfMemory
+                            ? "The game server ran out of memory and had to end this game."
+                            : "The game server hit an error it could not recover from and had to end this game.");
+                }
+            } finally {
+                // A finished game is kept only for its final messages. Holding the whole
+                // engine state while the player reads the result would count against the
+                // server's memory for as long as the tab stays open.
+                releaseGame();
             }
         }, "forge-game-" + ForgeServer.getSessionId(wsContext));
         gameThread.setDaemon(true);
@@ -161,8 +196,9 @@ public class GameSession {
      * This unblocks the BridgePlayerController which is waiting for input.
      */
     public void handleChoiceResponse(JsonObject payload) {
-        if (humanController != null) {
-            humanController.receiveChoiceResponse(payload);
+        BridgePlayerController controller = humanController;
+        if (controller != null) {
+            controller.receiveChoiceResponse(payload);
         }
     }
 
@@ -170,6 +206,8 @@ public class GameSession {
      * Player concedes the game.
      */
     public void concede() {
+        Game game = this.game;
+        BridgePlayerController humanController = this.humanController;
         if (game != null && !game.isGameOver()) {
             for (Player p : game.getPlayers()) {
                 if (p.getController() == humanController) {
@@ -180,16 +218,60 @@ public class GameSession {
         }
     }
 
+    /** A game that is still being played: counts against the server's limit. */
+    public boolean isActive() {
+        Thread thread = gameThread;
+        return running && thread != null && thread.isAlive();
+    }
+
+    /** Drop every reference to the engine's state so it can be collected. */
+    private void releaseGame() {
+        BridgePlayerController controller = humanController;
+        humanController = null;
+        game = null;
+        match = null;
+        guiGame = null;
+        eventForwarder = null;
+        if (controller != null) {
+            try {
+                controller.shutdown();
+            } catch (Throwable ignored) {
+                // already gone
+            }
+        }
+    }
+
     /**
      * Clean up when the session ends.
      */
     public void shutdown() {
         running = false;
-        if (humanController != null) {
-            humanController.shutdown();
+        GameEventForwarder forwarder = eventForwarder;
+        if (forwarder != null) forwarder.mute();
+        BridgeGuiGame gui = guiGame;
+        if (gui != null) gui.mute();
+        BridgePlayerController controller = humanController;
+        if (controller != null) {
+            controller.shutdown();
         }
-        if (gameThread != null) {
-            gameThread.interrupt();
+        // End the game itself. Without this the engine thread carried on after the player
+        // left: every prompt answered with a default, the AI opponents playing each other to
+        // the finish, the whole game held in memory and a processor kept busy for a game
+        // nobody was watching. The engine expects to be ended from outside at any moment
+        // (its loop checks isGameOver throughout), so this is its own way out.
+        Game abandoned = game;
+        if (abandoned != null) {
+            try {
+                if (!abandoned.isGameOver()) {
+                    abandoned.setGameOver(GameEndReason.Draw);
+                }
+            } catch (Throwable t) {
+                log.warn("Could not end the abandoned game cleanly: {}", t.toString());
+            }
+        }
+        Thread thread = gameThread;
+        if (thread != null) {
+            thread.interrupt();
         }
         log.info("Session shut down");
     }

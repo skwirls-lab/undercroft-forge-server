@@ -323,7 +323,15 @@ public class BridgeGuiGame implements IGuiGame {
         sendUiEvent(eventType, new JsonObject());
     }
 
+    /** Set when the session ends, so a game being torn down sends nothing more. */
+    private volatile boolean muted = false;
+
+    void mute() {
+        muted = true;
+    }
+
     private void sendUiEvent(String eventType, JsonObject data) {
+        if (muted) return;
         data.addProperty("eventType", eventType);
         ForgeServer.sendMessage(wsContext, "game_event", data);
     }
